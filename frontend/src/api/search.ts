@@ -1,10 +1,11 @@
 import { API_BASE_URL, readErrorMessage, requestJson } from "./client";
-import type { SearchResponse, StreamEvent } from "./types";
+import type { LLMConfigurationInput, SearchResponse, StreamEvent } from "./types";
 
 export function searchKnowledgeBase(payload: {
   knowledge_base_id: number;
   query: string;
   top_k: number;
+  llm?: LLMConfigurationInput;
 }): Promise<SearchResponse> {
   return requestJson<SearchResponse>("/api/search", {
     method: "POST",
@@ -55,4 +56,3 @@ export async function streamSearchKnowledgeBase(
     }
   }
 }
-
