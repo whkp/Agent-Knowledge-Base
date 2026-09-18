@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.database import get_db
-from app.db.schemas import DocumentDetail, DocumentPage, TextDocumentCreate
+from app.db.schemas import DocumentDetail, DocumentPage, SourceSnapshotCreate, TextDocumentCreate
 from app.services import document_service, knowledge_service
 from app.services.document_service import DocumentIndexingError
 
@@ -31,6 +31,27 @@ def create_text_document(
 
 
 @router.post(
+    "/knowledge-bases/{knowledge_base_id}/documents/source-snapshot",
+    response_model=DocumentDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_source_snapshot(
+    knowledge_base_id: int,
+    payload: SourceSnapshotCreate,
+    db: Session = Depends(get_db),
+):
+    """Persist an externally collected source before it is indexed for RAG."""
+
+    knowledge_base = knowledge_service.get_knowledge_base(db, knowledge_base_id)
+    if knowledge_base is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found.")
+    try:
+        return document_service.create_source_snapshot(db, knowledge_base, payload)
+    except DocumentIndexingError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.post(
     "/knowledge-bases/{knowledge_base_id}/documents/file",
     response_model=DocumentDetail,
     status_code=status.HTTP_201_CREATED,
@@ -38,6 +59,8 @@ def create_text_document(
 async def create_file_document(
     knowledge_base_id: int,
     title: str = Form(...),
+    tags: str = Form(default=""),
+    synthesize_topic: bool | None = Form(default=None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -67,7 +90,10 @@ async def create_file_document(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Document content cannot be empty.")
 
     try:
-        return document_service.create_file_document(db, knowledge_base, title, content, file.filename)
+        parsed_tags = [item.strip() for item in tags.split(",") if item.strip()]
+        return document_service.create_file_document(
+            db, knowledge_base, title, content, file.filename, parsed_tags, synthesize_topic
+        )
     except DocumentIndexingError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 

@@ -17,6 +17,14 @@ def fake_chroma_results() -> dict:
                     "chunk_id": 10,
                     "chunk_index": 0,
                     "title": "春",
+                    "source_url": "https://example.com/spring",
+                    "source_platform": "web",
+                    "source_author": "作者",
+                    "source_account": "author",
+                    "source_published_at": "2026-08-17T08:00:00+00:00",
+                    "source_captured_at": "2026-08-17T09:00:00+00:00",
+                    "source_policy": "full_text",
+                    "content_hash": "abc123",
                 },
                 {
                     "knowledge_base_id": 1,
@@ -65,6 +73,9 @@ def test_search_success(client: TestClient, monkeypatch):
     assert data["results"][0]["document_id"] == 2
     assert data["results"][0]["title"] == "春"
     assert data["results"][0]["score"] == 0.8929
+    assert data["results"][0]["source_url"] == "https://example.com/spring"
+    assert data["results"][0]["source_author"] == "作者"
+    assert data["results"][0]["source_policy"] == "full_text"
 
 
 def test_search_empty_query_fails(client: TestClient):

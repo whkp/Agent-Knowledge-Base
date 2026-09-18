@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Any
 
 from app.db.schemas import SearchRequest, SearchResponse, SearchResult
-from app.services import embedding_service
+from app.services import embedding_service, llm_service
 from app.vector import chroma_client
 
 
@@ -20,7 +21,28 @@ def search_knowledge_base(payload: SearchRequest) -> SearchResponse:
     except Exception as exc:
         raise RetrievalError("Failed to search knowledge base.") from exc
 
-    return SearchResponse(query=payload.query, results=_parse_chroma_results(raw_results))
+    results = _parse_chroma_results(raw_results)
+    synthesis = llm_service.synthesize_answer(
+        question=payload.query,
+        evidence=[
+            llm_service.Evidence(
+                reference=str(index + 1),
+                title=result.title or f"来源 #{result.document_id}",
+                content=result.chunk,
+            )
+            for index, result in enumerate(results)
+        ],
+        mode="rag",
+        override=payload.llm,
+    )
+    return SearchResponse(
+        query=payload.query,
+        results=results,
+        answer=synthesis.answer,
+        answer_mode="llm" if synthesis.answer else "retrieval",
+        model=synthesis.model,
+        model_error=synthesis.error,
+    )
 
 
 def _parse_chroma_results(raw_results: dict[str, Any]) -> list[SearchResult]:
@@ -40,6 +62,14 @@ def _parse_chroma_results(raw_results: dict[str, Any]) -> list[SearchResult]:
                 score=_distance_to_score(distance),
                 chunk_id=_optional_int(metadata.get("chunk_id")),
                 chunk_index=_optional_int(metadata.get("chunk_index")),
+                source_url=_optional_str(metadata.get("source_url")),
+                source_platform=_optional_str(metadata.get("source_platform")),
+                source_author=_optional_str(metadata.get("source_author")),
+                source_account=_optional_str(metadata.get("source_account")),
+                source_published_at=_optional_datetime(metadata.get("source_published_at")),
+                source_captured_at=_optional_datetime(metadata.get("source_captured_at")),
+                source_policy=_optional_str(metadata.get("source_policy")),
+                content_hash=_optional_str(metadata.get("content_hash")),
             )
         )
 
@@ -74,4 +104,21 @@ def _optional_int(value: Any) -> int | None:
     try:
         return int(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    cleaned = _optional_str(value)
+    if not cleaned:
+        return None
+    try:
+        return datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+    except ValueError:
         return None

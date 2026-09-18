@@ -8,12 +8,15 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import get_settings
 from app.db.database import Base, get_db
 from app.main import create_app
+from app.services import llm_service
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch) -> Generator[TestClient, None, None]:
     monkeypatch.setenv("VECTOR_INDEX_ENABLED", "false")
+    monkeypatch.setenv("WIKI_ROOT_DIR", str(tmp_path / "wiki"))
     get_settings.cache_clear()
+    llm_service.clear_runtime_config()
 
     database_url = f"sqlite:///{tmp_path / 'test.db'}"
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
@@ -36,6 +39,7 @@ def client(tmp_path, monkeypatch) -> Generator[TestClient, None, None]:
 
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
+    llm_service.clear_runtime_config()
     get_settings.cache_clear()
 
 

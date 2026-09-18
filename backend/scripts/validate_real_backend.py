@@ -24,7 +24,7 @@ def configure_temp_environment(work_dir: Path) -> None:
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="kk-real-backend-", ignore_cleanup_errors=True) as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="agentkb-real-backend-", ignore_cleanup_errors=True) as temp_dir:
         work_dir = Path(temp_dir)
         configure_temp_environment(work_dir)
 

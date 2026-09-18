@@ -5,6 +5,7 @@ from app.config import get_settings
 from app.db.models import KnowledgeBase
 from app.db.schemas import KnowledgeBaseCreate, KnowledgeBaseUpdate
 from app.vector import chroma_client
+from app.services import wiki_service
 
 
 class KnowledgeBaseIndexingError(RuntimeError):
@@ -16,6 +17,13 @@ def create_knowledge_base(db: Session, payload: KnowledgeBaseCreate) -> Knowledg
     db.add(knowledge_base)
     db.commit()
     db.refresh(knowledge_base)
+    try:
+        wiki_service.initialize_workspace(knowledge_base.id, knowledge_base.name, knowledge_base.description)
+    except Exception as exc:
+        wiki_service.delete_workspace(knowledge_base.id)
+        db.delete(knowledge_base)
+        db.commit()
+        raise KnowledgeBaseIndexingError("Failed to initialize wiki workspace.") from exc
     return knowledge_base
 
 
@@ -59,4 +67,4 @@ def delete_knowledge_base(db: Session, knowledge_base: KnowledgeBase) -> None:
 
     db.delete(knowledge_base)
     db.commit()
-
+    wiki_service.delete_workspace(knowledge_base.id)

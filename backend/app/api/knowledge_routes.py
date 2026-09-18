@@ -12,7 +12,10 @@ router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
 
 @router.post("", response_model=KnowledgeBaseRead, status_code=status.HTTP_201_CREATED)
 def create_knowledge_base(payload: KnowledgeBaseCreate, db: Session = Depends(get_db)):
-    return knowledge_service.create_knowledge_base(db, payload)
+    try:
+        return knowledge_service.create_knowledge_base(db, payload)
+    except KnowledgeBaseIndexingError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.get("", response_model=KnowledgeBasePage)

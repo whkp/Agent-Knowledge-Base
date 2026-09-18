@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import httpx
@@ -55,6 +56,12 @@ async def test_search_knowledge_base_success():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/api/search"
+        assert json.loads(request.content) == {
+            "knowledge_base_id": 1,
+            "query": "春天",
+            "top_k": 5,
+            "llm": {"enabled": False},
+        }
         return httpx.Response(
             200,
             json={
@@ -156,3 +163,87 @@ async def test_add_text_document_success():
     result = await tools.add_text_document(1, "春", "春天的脚步近了。")
 
     assert result["title"] == "春"
+
+
+@pytest.mark.anyio
+async def test_query_wiki_success():
+    set_transport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "query": "花草",
+                "answer": "春天包含花草。",
+                "results": [{"path": "wiki/topics/春天.md", "title": "春天", "score": 0.8}],
+                "saved_path": None,
+            },
+        )
+    )
+
+    result = await tools.query_wiki(1, "花草")
+
+    assert result["answer"] == "春天包含花草。"
+    assert result["results"][0]["path"] == "wiki/topics/春天.md"
+
+
+@pytest.mark.anyio
+async def test_query_wiki_forces_local_retrieval_even_when_backend_llm_is_enabled():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/knowledge-bases/1/wiki/query"
+        assert json.loads(request.content) == {
+            "query": "花草",
+            "top_k": 8,
+            "llm": {"enabled": False},
+        }
+        return httpx.Response(200, json={"query": "花草", "answer": "本地页面回答", "results": []})
+
+    set_transport(handler)
+
+    result = await tools.query_wiki(1, "花草")
+
+    assert result["answer"] == "本地页面回答"
+
+
+@pytest.mark.anyio
+async def test_synthesize_knowledge_explicitly_enables_backend_model_for_wiki():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/knowledge-bases/1/wiki/query"
+        assert json.loads(request.content) == {
+            "query": "花草",
+            "top_k": 8,
+            "save_as": "春天结论",
+            "llm": {"enabled": True},
+        }
+        return httpx.Response(
+            200,
+            json={
+                "query": "花草",
+                "answer": "春天与花草的新生有关。[1]",
+                "answer_mode": "llm",
+                "model": "test-model",
+                "results": [],
+                "saved_path": "queries/春天结论.md",
+            },
+        )
+
+    set_transport(handler)
+
+    result = await tools.synthesize_knowledge(1, "花草", "wiki", 8, "春天结论")
+
+    assert result["answer_mode"] == "llm"
+    assert result["model"] == "test-model"
+
+
+@pytest.mark.anyio
+async def test_synthesize_knowledge_rejects_unknown_source_mode():
+    result = await tools.synthesize_knowledge(1, "花草", "unknown")
+
+    assert result["error"] == "source_mode must be either 'wiki' or 'rag'."
+
+
+@pytest.mark.anyio
+async def test_read_wiki_page_rejects_empty_path():
+    result = await tools.read_wiki_page(1, "  ")
+
+    assert result["error"] == "path cannot be empty."
