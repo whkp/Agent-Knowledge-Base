@@ -119,6 +119,10 @@ kb-<id>/
 
 `POST /api/knowledge-bases/{knowledge_base_id}/documents/source-snapshot` 用于将已经在本地取得的外部来源纳入知识库。Backend 不负责模拟登录或抓取 X / 小红书；这样可以让服务端保持可部署、可测试，也避免把平台登录态混进应用进程。
 
+`PUT /api/knowledge-bases/{knowledge_base_id}/documents/{document_id}` 是它的对应更新路径：原地替换正文（可选刷新来源元数据），保留 document id、raw 快照路径、来源页路径与主题页来源行。没有它，改一份来源只能删了重摄，于是 document id 与来源页都会换新，主题页的 `## Sources` 也会多出一行。未提交的字段保持原值，因此只改正文不会丢掉抓取时记录的溯源信息。更新在单事务内完成：新向量先写入、旧向量后删除，且向量 id 带内容哈希（SQLite 会复用行号，否则"先加后删"会把刚写入的向量当作旧向量删掉）；内容未变化时跳过重复索引。模型相关的主题维护仍在事务提交后执行。
+
+同一知识库里，同一来源的**相同内容**会返回 `409 Conflict`，错误消息给出已有 document id 与应改用的更新接口。判定把来源身份也算进去：同一 URL（或同一文件名、同一标题）才算重摄；内容相同但来源不同的两次摄取是**两份来源**，合并它们会丢掉溯源。
+
 快照会在 `documents` 表保留完整 `content`，并记录 `content_hash`、`source_url`、`source_platform`、作者、账号、发布时间、抓取时间、披露信息和保存策略。`source_policy` 有三种值：
 
 | 策略 | 含义 | 是否适合原文 RAG |
@@ -317,6 +321,7 @@ Content-Type: application/json
 | --- | --- | --- |
 | 知识库 | `/api/knowledge-bases` | CRUD；创建时初始化 Markdown 工作区 |
 | 来源 | `/api/knowledge-bases/{id}/documents/text`、`/file`、`/source-snapshot` | 摄取文本、`.txt` 或本地外部来源快照，维护工作区和可选向量索引 |
+| 来源更新 | `PUT /api/knowledge-bases/{id}/documents/{document_id}` | 原地替换正文并保留 id 与页面路径；同一来源的相同内容在摄取时返回 409 |
 | 页面 | `/api/knowledge-bases/{id}/wiki/pages` | 浏览、读取和保存 Markdown 页面 |
 | Wiki 查询 | `/api/knowledge-bases/{id}/wiki/query` | 页面排序、可选模型综合、可选保存为 query 页面 |
 | RAG 查询 | `/api/search` | 向量召回、可选模型综合，始终返回检索证据 |

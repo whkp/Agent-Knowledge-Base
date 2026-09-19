@@ -176,6 +176,24 @@ and retention policy. `source_policy` has three values:
 | `excerpt` | only text explicitly marked as an excerpt is kept | yes, but the model and the user must know the content is incomplete |
 | `link_only` | only a link and a human note are kept; no claim to hold the text | no; the note must not be treated as the post body |
 
+`PUT /api/knowledge-bases/{knowledge_base_id}/documents/{document_id}` is the matching
+update path: it replaces the content in place (optionally refreshing source metadata) and
+keeps the document id, the raw snapshot path, the source page path and the topic page's
+source row. Without it, correcting a source means deleting and re-ingesting, which produces
+a new document id, a new source page and a second row in `## Sources`. Fields the caller
+does not send keep their current value, so a text correction cannot silently drop captured
+provenance. The update runs in one transaction: new vectors are written before the stale
+ones are dropped, vector ids carry the content hash (SQLite reuses row ids, so an id derived
+from the row id alone would make the next step delete the vectors just written), and
+re-indexing is skipped when the content did not change. Model-backed topic maintenance still
+runs after the commit.
+
+Within one knowledge base, **identical content from the same source** returns
+`409 Conflict`, and the message names the existing document id and the update endpoint to
+use instead. Source identity is part of that match: the same URL (or the same file name, or
+the same title) is what makes it a re-capture. Identical text from two different sources is
+two sources, and collapsing them would discard provenance.
+
 SQLite is the application query and consistency index, `raw/sources/` is the reviewable
 Markdown snapshot, and Chroma is a deletable, rebuildable chunk index. Chroma metadata also
 records source URL, platform, author, policy and content hash, so a RAG hit can be traced
@@ -448,6 +466,7 @@ failing the whole query.
 | --- | --- | --- |
 | Knowledge bases | `/api/knowledge-bases` | CRUD; creation initialises the Markdown workspace |
 | Sources | `/api/knowledge-bases/{id}/documents/text`, `/file`, `/source-snapshot` | ingest text, `.txt` or a local external source snapshot, maintaining the workspace and the optional vector index |
+| Source update | `PUT /api/knowledge-bases/{id}/documents/{document_id}` | replace content in place, keeping the id and the page paths; identical content from the same source is a 409 on ingest |
 | Pages | `/api/knowledge-bases/{id}/wiki/pages` | browse, read and save Markdown pages |
 | Wiki query | `/api/knowledge-bases/{id}/wiki/query` | page ranking, optional model synthesis, optional save as a query page |
 | RAG query | `/api/search` | vector recall, optional model synthesis, always returns retrieval evidence |

@@ -399,6 +399,7 @@ list_answer_feedback
 list_knowledge_bases
 add_text_document
 add_source_to_wiki
+update_source_in_wiki
 get_wiki_status
 list_wiki_pages
 read_wiki_page
@@ -426,6 +427,13 @@ add_text_document:
 add_source_to_wiki:
   calls the Backend text ingest endpoint
   maintains the raw snapshot, source page, topic page, index and activity log together
+  identical content from the same source is a conflict; update that document instead
+
+update_source_in_wiki:
+  calls Backend PUT /api/knowledge-bases/{id}/documents/{document_id}
+  replaces an existing source in place: the document id, raw snapshot path, source page path
+  and the topic page's source row all stay the same
+  passes synthesize_topic=false like every other ingest tool
 
 get_wiki_status / list_wiki_pages / read_wiki_page:
   reads the workspace status and the Markdown pages

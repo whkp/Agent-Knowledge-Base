@@ -399,6 +399,7 @@ list_answer_feedback
 list_knowledge_bases
 add_text_document
 add_source_to_wiki
+update_source_in_wiki
 get_wiki_status
 list_wiki_pages
 read_wiki_page
@@ -426,6 +427,12 @@ add_text_document:
 add_source_to_wiki:
   调用 Backend 文本摄取接口
   同时维护 raw 快照、来源页、主题页、索引和活动日志
+  同一来源的相同内容会被 Backend 判为重复并返回冲突，此时应改用 update_source_in_wiki
+
+update_source_in_wiki:
+  调用 Backend PUT /api/knowledge-bases/{id}/documents/{document_id}
+  原地替换已有来源的正文，document id、raw 快照路径、来源页路径与主题页来源行都保持不变
+  与其他摄取工具一样传 synthesize_topic=false
 
 get_wiki_status / list_wiki_pages / read_wiki_page:
   读取知识库工作区状态和 Markdown 页面

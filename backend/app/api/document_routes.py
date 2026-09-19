@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.database import get_db
-from app.db.schemas import DocumentDetail, DocumentPage, SourceSnapshotCreate, TextDocumentCreate
+from app.db.schemas import DocumentDetail, DocumentPage, DocumentUpdate, SourceSnapshotCreate, TextDocumentCreate
 from app.services import document_service, knowledge_service
-from app.services.document_service import DocumentIndexingError
+from app.services.document_service import DocumentIndexingError, DuplicateDocumentError
 
 
 router = APIRouter(tags=["documents"])
@@ -26,6 +26,8 @@ def create_text_document(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found.")
     try:
         return document_service.create_text_document(db, knowledge_base, payload)
+    except DuplicateDocumentError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except DocumentIndexingError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -47,6 +49,8 @@ def create_source_snapshot(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found.")
     try:
         return document_service.create_source_snapshot(db, knowledge_base, payload)
+    except DuplicateDocumentError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except DocumentIndexingError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -94,6 +98,8 @@ async def create_file_document(
         return document_service.create_file_document(
             db, knowledge_base, title, content, file.filename, parsed_tags, synthesize_topic
         )
+    except DuplicateDocumentError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except DocumentIndexingError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -119,6 +125,31 @@ def get_document(document_id: int, db: Session = Depends(get_db)):
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
     return document
+
+
+@router.put("/knowledge-bases/{knowledge_base_id}/documents/{document_id}", response_model=DocumentDetail)
+def update_document(
+    knowledge_base_id: int,
+    document_id: int,
+    payload: DocumentUpdate,
+    db: Session = Depends(get_db),
+):
+    """Replace a document's content in place, keeping its id and its wiki pages."""
+
+    knowledge_base = knowledge_service.get_knowledge_base(db, knowledge_base_id)
+    if knowledge_base is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found.")
+    document = document_service.get_document(db, document_id)
+    # A document from another knowledge base is not found here, so an id cannot be used
+    # to write into a workspace the caller did not name.
+    if document is None or document.knowledge_base_id != knowledge_base.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    try:
+        return document_service.update_document(db, knowledge_base, document, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except DocumentIndexingError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -217,7 +217,7 @@ python server.py
 }
 ```
 
-MCP 被设计为外部 Agent 的知识基础设施：`query_wiki` 与 `search_knowledge_base` 始终返回本地检索证据，即使工作台模型已启用也不会调用 AgentKB 的模型。调用方 Agent 通常应当用自己的模型完成最终综合。只有调用方明确希望由 Backend 配置的模型产出带引用依据的答案时，才使用 `synthesize_knowledge`。摄取工具会传 `synthesize_topic: false`，因此由 MCP 触发的摄取绝不会用 Backend 模型改写主题页。wiki 查询结果可能包含沿链接到达的页面（`related: true`），应把它们当作支撑性上下文而不是直接命中。其他 MCP 工具包括 `add_source_to_wiki`、`read_wiki_page`、`list_wiki_pages`、`get_wiki_status` 与 `lint_wiki`。较旧的 `add_text_document` 仍保留以兼容旧调用。
+MCP 被设计为外部 Agent 的知识基础设施：`query_wiki` 与 `search_knowledge_base` 始终返回本地检索证据，即使工作台模型已启用也不会调用 AgentKB 的模型。调用方 Agent 通常应当用自己的模型完成最终综合。只有调用方明确希望由 Backend 配置的模型产出带引用依据的答案时，才使用 `synthesize_knowledge`。摄取工具会传 `synthesize_topic: false`，因此由 MCP 触发的摄取绝不会用 Backend 模型改写主题页。wiki 查询结果可能包含沿链接到达的页面（`related: true`），应把它们当作支撑性上下文而不是直接命中。其他 MCP 工具包括 `add_source_to_wiki`、`update_source_in_wiki`（原地重摄同一来源，摄取返回冲突时使用）、`read_wiki_page`、`list_wiki_pages`、`get_wiki_status` 与 `lint_wiki`。较旧的 `add_text_document` 仍保留以兼容旧调用。
 
 ## Wiki 工作区
 

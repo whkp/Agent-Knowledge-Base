@@ -173,6 +173,45 @@ class DocumentChunkRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DocumentUpdate(BaseModel):
+    """Replacement content for an existing document.
+
+    The document id, its chunk rows and its Markdown paths are preserved: this is not a
+    delete-and-re-ingest. Omitted source fields keep their current value, so a client can
+    correct the text without restating provenance it did not capture again.
+    """
+
+    content: str = Field(min_length=1)
+    title: str | None = Field(default=None, max_length=200)
+    tags: list[str] | None = Field(default=None, max_length=12)
+    source_url: str | None = Field(default=None, max_length=2_048)
+    source_platform: str | None = Field(default=None, max_length=60)
+    source_author: str | None = Field(default=None, max_length=255)
+    source_account: str | None = Field(default=None, max_length=255)
+    source_published_at: datetime | None = None
+    source_captured_at: datetime | None = None
+    source_policy: Literal["full_text", "excerpt", "link_only"] | None = None
+    source_disclosures: list[str] | None = Field(default=None, max_length=20)
+    synthesize_topic: bool | None = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_optional_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Document title cannot be empty.")
+        return value
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Document content cannot be empty.")
+        return value
+
+
 class DocumentRead(BaseModel):
     id: int
     knowledge_base_id: int
@@ -188,7 +227,12 @@ class DocumentRead(BaseModel):
     source_captured_at: datetime | None
     source_policy: str
     source_disclosures: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     content_hash: str
+    # Workspace paths, so a client can tell that an update rewrote the same pages.
+    raw_path: str | None = None
+    source_path: str | None = None
+    topic_path: str | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -19,6 +19,7 @@ from tools import (
     search_knowledge_base,
     search_with_strategy,
     synthesize_knowledge,
+    update_source_in_wiki,
 )
 
 
@@ -29,6 +30,7 @@ mcp.tool()(search_knowledge_base)
 mcp.tool()(list_knowledge_bases)
 mcp.tool()(add_text_document)
 mcp.tool()(add_source_to_wiki)
+mcp.tool()(update_source_in_wiki)
 mcp.tool()(get_wiki_status)
 mcp.tool()(list_wiki_pages)
 mcp.tool()(read_wiki_page)

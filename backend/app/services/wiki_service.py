@@ -156,6 +156,8 @@ def ingest_source(
     summary = _summary(content)
     topic_path, topic_title, topic_content = _resolve_topic_page(root, title, summary, document_id)
     topic_content = _merge_topic(topic_content, summary, source_name, tags or [])
+    # Ingest never rewrites the topic's prose: an existing page may carry a model synthesis
+    # or a person's notes, and only an update of the source that owns it may refresh it.
     topic_content = _with_topic_front_matter(topic_content, sources=_topic_source_names(topic_content))
     topic_path.write_text(topic_content, encoding="utf-8")
     source_path.write_text(
@@ -182,6 +184,103 @@ def ingest_source(
     )
     rebuild_index(knowledge_base_id)
     return {"raw_path": _relative(root, raw_path), "source_path": _relative(root, source_path), "topic_path": _relative(root, topic_path)}
+
+
+def update_source(
+    knowledge_base_id: int,
+    knowledge_base_name: str,
+    document_id: int,
+    title: str,
+    content: str,
+    source_type: str,
+    file_name: str | None,
+    tags: list[str] | None = None,
+    source_url: str | None = None,
+    source_platform: str | None = None,
+    source_author: str | None = None,
+    source_account: str | None = None,
+    source_published_at: datetime | None = None,
+    source_captured_at: datetime | None = None,
+    source_policy: str = "full_text",
+    source_disclosures: list[str] | None = None,
+    content_hash: str = "",
+    source_name: str | None = None,
+    topic_name: str | None = None,
+) -> dict[str, str]:
+    """Rewrite an already-ingested source in place.
+
+    Paths are reused rather than re-derived, so the document keeps its raw snapshot, its
+    source page and its row in the topic page's source list: correcting a source cannot
+    leave an orphan page behind or create a second source row. Model work still happens
+    after the transaction, in `complete_ingest`.
+    """
+    root = initialize_workspace(knowledge_base_id, knowledge_base_name, None)
+    source_name = source_name or f"{document_id}-{_slug(title) or f'source-{document_id}'}"
+    raw_path = root / "raw" / "sources" / f"{source_name}.md"
+    source_path = root / "wiki" / "sources" / f"{source_name}.md"
+    raw_path.write_text(
+        _raw_source_page(
+            title=title,
+            content=content,
+            source_type=source_type,
+            file_name=file_name,
+            source_url=source_url,
+            source_platform=source_platform,
+            source_author=source_author,
+            source_account=source_account,
+            source_published_at=source_published_at,
+            source_captured_at=source_captured_at,
+            source_policy=source_policy,
+            source_disclosures=source_disclosures or [],
+            content_hash=content_hash,
+        ),
+        encoding="utf-8",
+    )
+
+    summary = _summary(content)
+    topic_path = root / "wiki" / "topics" / f"{topic_name}.md" if topic_name else None
+    topic_content = topic_path.read_text(encoding="utf-8") if topic_path and topic_path.exists() else ""
+    if not topic_content:
+        topic_path, _topic_title, topic_content = _resolve_topic_page(root, title, summary, document_id)
+    topic_content = _merge_topic(
+        _drop_source_block(topic_content, source_name),
+        summary,
+        source_name,
+        tags or [],
+    )
+    listed = _topic_source_names(topic_content)
+    topic_content = _with_topic_front_matter(topic_content, sources=listed)
+    if listed == [source_name]:
+        topic_content = _refresh_topic_summary(topic_content, summary)
+    topic_path.write_text(topic_content, encoding="utf-8")
+    source_path.write_text(
+        _source_page(
+            title,
+            summary,
+            source_name,
+            topic_path.stem,
+            content,
+            tags or [],
+            source_url=source_url,
+            source_platform=source_platform,
+            source_author=source_author,
+            source_account=source_account,
+            source_published_at=source_published_at,
+            source_policy=source_policy,
+        ),
+        encoding="utf-8",
+    )
+    append_log(
+        knowledge_base_id,
+        f"update | {title}",
+        f"Re-ingested [[sources/{source_name}]] in place; raw snapshot and [[topics/{topic_path.stem}]] refreshed.",
+    )
+    rebuild_index(knowledge_base_id)
+    return {
+        "raw_path": _relative(root, raw_path),
+        "source_path": _relative(root, source_path),
+        "topic_path": _relative(root, topic_path),
+    }
 
 
 def complete_ingest(
@@ -350,6 +449,56 @@ def _move_source_between_topics(
     destination_content = _merge_topic(destination.read_text(encoding="utf-8"), summary, source_name, [])
     destination_content = _with_topic_front_matter(destination_content, sources=_topic_source_names(destination_content))
     destination.write_text(destination_content, encoding="utf-8")
+
+
+def _refresh_topic_summary(content: str, summary: str) -> str:
+    """Point a single-source topic page at the source's current summary.
+
+    A topic page that aggregates several sources keeps the prose its synthesis was built
+    on — the `## Sources` list is the per-source record. A page that holds exactly one
+    source has no aggregation to protect, and leaving its front matter describing the
+    previous version of that source would make the page contradict itself.
+    """
+    updated = _with_topic_front_matter(content, summary=summary)
+    lines = updated.splitlines()
+    heading = next((index for index, line in enumerate(lines) if line.startswith("# ")), None)
+    if heading is None:
+        return updated
+    start = heading + 1
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    if start >= len(lines):
+        return updated
+    end = start
+    while end < len(lines) and lines[end].strip():
+        end += 1
+    return "\n".join([*lines[:start], summary, *lines[end:]])
+
+
+def _drop_source_block(content: str, source_name: str) -> str:
+    """Remove a source's bullet and the `Tags:` line that was merged with it.
+
+    `_merge_topic` writes the two as a pair, so dropping only the bullet (which is what
+    deletion does) leaves a stale tags line behind — harmless once, cumulative when a
+    source is refreshed repeatedly.
+    """
+    prefix = f"[[sources/{source_name}]]"
+    lines = content.splitlines()
+    kept: list[str] = []
+    skip_tags = False
+    for line in lines:
+        if prefix in line:
+            skip_tags = True
+            continue
+        if skip_tags:
+            if not line.strip():
+                continue
+            if line.startswith("Tags:"):
+                skip_tags = False
+                continue
+            skip_tags = False
+        kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def _drop_source_line(content: str, source_name: str) -> str:
@@ -990,6 +1139,10 @@ def _merge_topic(content: str, summary: str, source_name: str, tags: list[str]) 
     marker = "## Sources"
     if marker not in content:
         content = content.rstrip() + f"\n\n{marker}\n\n"
+    else:
+        # `## Sources` can be the last thing in the file; appending straight after it would
+        # weld the heading to the first bullet.
+        content = content.rstrip("\n") + "\n\n"
     content += f"- {source_link}: {summary}\n"
     if tags:
         content += f"\nTags: {', '.join(f'`{tag}`' for tag in tags)}\n"

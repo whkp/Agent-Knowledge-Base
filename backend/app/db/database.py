@@ -50,8 +50,12 @@ _DOCUMENT_COLUMN_MIGRATIONS = {
     "source_policy": "VARCHAR(20) DEFAULT 'full_text'",
     "source_disclosures": "TEXT DEFAULT '[]'",
     "content_hash": "VARCHAR(64)",
+    "tags": "TEXT DEFAULT '[]'",
+    # Where a document's Markdown lives, so an update rewrites it in place.
+    "raw_path": "VARCHAR(512)",
+    "source_path": "VARCHAR(512)",
+    "topic_path": "VARCHAR(512)",
 }
-
 
 _FEEDBACK_COLUMN_MIGRATIONS: dict[str, str] = {
     "strategy_id": "VARCHAR(40)",
@@ -100,6 +104,7 @@ def ensure_schema_compatibility(bind: Engine) -> None:
         connection.execute(
             text("UPDATE documents SET source_disclosures = '[]' WHERE source_disclosures IS NULL OR source_disclosures = ''")
         )
+        connection.execute(text("UPDATE documents SET tags = '[]' WHERE tags IS NULL OR tags = ''"))
         rows = connection.execute(
             text("SELECT id, content FROM documents WHERE content_hash IS NULL OR content_hash = ''")
         )

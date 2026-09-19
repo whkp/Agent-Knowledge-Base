@@ -324,3 +324,43 @@ async def test_search_with_strategy_sends_the_strategy_and_stays_model_free():
 @pytest.mark.anyio
 async def test_search_with_strategy_rejects_an_empty_strategy():
     assert "error" in await tools.search_with_strategy(knowledge_base_id=1, query="x", strategy="   ")
+
+
+@pytest.mark.anyio
+async def test_update_source_in_wiki_keeps_ingest_model_free():
+    seen: dict = {}
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"id": 7, "title": "来源", "chunks": []})
+
+    set_transport(transport)
+
+    result = await tools.update_source_in_wiki(3, 7, "修订后的正文。", title="来源（修订）")
+
+    assert result["id"] == 7
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/knowledge-bases/3/documents/7"
+    # Same contract as every other MCP ingest tool: never trigger topic rewriting.
+    assert seen["body"]["synthesize_topic"] is False
+    assert seen["body"]["title"] == "来源（修订）"
+
+
+@pytest.mark.anyio
+async def test_update_source_in_wiki_rejects_empty_content():
+    set_transport(lambda request: httpx.Response(200, json={}))
+
+    assert "error" in await tools.update_source_in_wiki(1, 2, "   ")
+    assert "error" in await tools.update_source_in_wiki(0, 2, "正文")
+    assert "error" in await tools.update_source_in_wiki(1, 0, "正文")
+
+
+@pytest.mark.anyio
+async def test_update_source_in_wiki_surfaces_a_backend_conflict():
+    set_transport(lambda request: httpx.Response(404, json={"detail": "Document not found."}))
+
+    result = await tools.update_source_in_wiki(1, 99, "正文")
+
+    assert result["error"]

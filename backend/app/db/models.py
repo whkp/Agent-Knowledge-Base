@@ -51,6 +51,15 @@ class Document(Base):
     source_policy: Mapped[str] = mapped_column(String(20), default="full_text", nullable=False)
     source_disclosures: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Tags are shown in the topic page's source list, so they are kept on the document
+    # rather than only passed through at ingest time.
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Where this document's Markdown lives, relative to its workspace. Stored rather
+    # than re-derived from the title, so an update keeps the same paths (and an
+    # orphaned page cannot appear when a title is corrected).
+    raw_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    topic_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

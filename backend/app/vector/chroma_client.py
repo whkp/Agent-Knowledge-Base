@@ -53,6 +53,15 @@ class ChromaVectorStore:
         except Exception as exc:
             raise VectorStoreError("Failed to write vectors to ChromaDB.") from exc
 
+    def delete_chunks(self, vector_ids: list[str]) -> None:
+        """Delete specific vectors, used when a document is re-indexed in place."""
+        if not vector_ids:
+            return
+        try:
+            self.collection.delete(ids=vector_ids)
+        except Exception as exc:
+            raise VectorStoreError("Failed to delete vectors from ChromaDB.") from exc
+
     def delete_by_document_id(self, document_id: int) -> None:
         self._delete_where({"document_id": document_id})
 
@@ -98,6 +107,10 @@ def add_chunks(
     metadatas: list[dict[str, Any]],
 ) -> None:
     get_vector_store().add_chunks(vector_ids, embeddings, documents, metadatas)
+
+
+def delete_chunks(vector_ids: list[str]) -> None:
+    get_vector_store().delete_chunks(vector_ids)
 
 
 def delete_by_document_id(document_id: int) -> None:

@@ -300,6 +300,39 @@ async def add_source_to_wiki(knowledge_base_id: int, title: str, content: str, t
     return response
 
 
+async def update_source_in_wiki(
+    knowledge_base_id: int,
+    document_id: int,
+    content: str,
+    title: str | None = None,
+) -> dict[str, Any]:
+    """Replace an already-ingested source's content, keeping its id and wiki pages.
+
+    Use this when ingest returns a conflict: the same content from the same source is
+    already recorded, and the answer is to update that document rather than to create a
+    second copy of it. Topic-page rewriting by the Backend model stays disabled, like
+    every other MCP ingest tool.
+    """
+    content = content.strip()
+    if knowledge_base_id <= 0:
+        return _error("knowledge_base_id must be greater than 0.")
+    if document_id <= 0:
+        return _error("document_id must be greater than 0.")
+    if not content:
+        return _error("content cannot be empty.")
+    payload: dict[str, Any] = {"content": content, "synthesize_topic": False}
+    if title and title.strip():
+        payload["title"] = title.strip()
+    response = await _request(
+        "PUT",
+        f"/api/knowledge-bases/{knowledge_base_id}/documents/{document_id}",
+        json=payload,
+    )
+    if "error" in response:
+        return _error(response["error"])
+    return response
+
+
 async def _request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
     try:
         async with httpx.AsyncClient(
