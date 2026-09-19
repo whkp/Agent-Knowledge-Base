@@ -189,6 +189,28 @@ MCP 的目标是让 Codex、Claude Code 等外部 Agent 接入可追溯知识，
 
 `synthesize_knowledge` 不接收 Provider 地址、模型名或 API Key。它只使用 Backend 的有效配置，仍遵循第 6 节的优先级和密钥边界。调用方 Agent 应优先使用基础查询工具并自行整合证据；只有任务需要单独的、可引用的知识库综合答案时才调用显式综合工具。
 
+### 5.5 回答反馈
+
+`POST /api/knowledge-bases/{knowledge_base_id}/feedback`
+
+回答下方可以点「有用」或「没用」；选「没用」时展开一个可选的说明输入框。这是**检索策略唯一的评估信号来源**，因此每条记录都保留足够的信息，以便日后重放这次查询：
+
+| 字段 | 用途 |
+| --- | --- |
+| `mode` | `wiki`（页面优先）或 `rag`（原始资料） |
+| `query` / `answer` | 被评价的问题与当时的回答（回答截断保存，便于人工复核失败样例） |
+| `rating` | 只接受 `1` 或 `-1` |
+| `note` | 贬低时可选的原因 |
+| `answer_mode` / `model` | 这次回答是确定性模板还是模型综合、用的哪个模型 |
+| `source_paths` | 当时展示的引用页面路径，或 `document:<id>#<chunk>` 片段 |
+
+存储与边界：
+
+- 反馈是**业务数据**，写入 SQLite 的 `query_feedback`；它不是知识，**不得写入 wiki 页面或 Markdown 工作区**，也不改变当次回答。
+- 记录是 append-only：用户改主意会产生新行，而不是覆盖旧行，这样"判断变化"本身也是可分析的数据。
+- `GET .../feedback` 读回信号，并返回 `positive` / `negative` 汇总计数。目前只有接口，工作台与 MCP 尚未消费它。
+
+
 ## 6. 模型配置
 
 ### 6.1 配置来源与优先级

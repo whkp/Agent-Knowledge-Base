@@ -19,6 +19,8 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   Upload,
   ExternalLink,
   X,
@@ -26,6 +28,7 @@ import {
 import { uploadTextDocument, uploadTxtDocument } from "./api/documents";
 import { createKnowledgeBase, listKnowledgeBases } from "./api/knowledge";
 import { getLLMConfig, testLLMConfig, updateLLMConfig } from "./api/llm";
+import { submitQueryFeedback } from "./api/feedback";
 import { searchKnowledgeBase } from "./api/search";
 import { getWikiGraph, getWikiStatus, lintWiki, listAllWikiPages, queryWiki, readWikiPage, saveWikiPage } from "./api/wiki";
 import type { KnowledgeBase, LLMConfigurationInput, LLMConfigStatus, SearchResponse, WikiGraph, WikiLint, WikiPage, WikiQueryResponse, WikiStatus } from "./api/types";
@@ -551,8 +554,8 @@ export default function App() {
               llmReady={llmReady}
               model={llmForm.model}
             >
-              {queryResult ? <QueryResult result={queryResult} onOpenPage={(path) => void openPage(path)} /> : null}
-              {ragResult ? <RagResult result={ragResult} /> : null}
+              {queryResult ? <QueryResult knowledgeBaseId={selected?.id ?? null} result={queryResult} onOpenPage={(path) => void openPage(path)} /> : null}
+              {ragResult ? <RagResult knowledgeBaseId={selected?.id ?? null} result={ragResult} /> : null}
             </QueryDock>
           ) : null}
         </section>
@@ -814,7 +817,7 @@ function RichText({ className, content, onOpenPage, onCite }: {
   );
 }
 
-function QueryResult({ result, onOpenPage }: { result: WikiQueryResponse; onOpenPage: (path: string) => void }) {
+function QueryResult({ knowledgeBaseId, result, onOpenPage }: { knowledgeBaseId: number | null; result: WikiQueryResponse; onOpenPage: (path: string) => void }) {
   const [activeRef, setActiveRef] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const relatedCount = result.results.filter((item) => item.related).length;
@@ -829,10 +832,19 @@ function QueryResult({ result, onOpenPage }: { result: WikiQueryResponse; onOpen
     <RichText className="answer-copy" content={result.answer} onOpenPage={onOpenPage} onCite={focusReference} />
     {result.model_error ? <p className="result-fallback"><AlertCircle size={13} /> {result.model_error}</p> : null}
     {result.results.length ? <div className="citation-list" ref={listRef}>{result.results.map((item, index) => <button className={`${activeRef === index + 1 ? "active" : ""} ${item.related ? "related" : ""}`} data-ref-anchor={index + 1} data-ref={index + 1} key={item.path} onClick={() => onOpenPage(item.path)}><span>{item.title}</span>{item.related ? <em className="cite-related">关联</em> : null}<small>{item.path}</small></button>)}</div> : null}
+    <FeedbackControl
+      knowledgeBaseId={knowledgeBaseId}
+      mode="wiki"
+      query={result.query}
+      answer={result.answer}
+      answerMode={result.answer_mode}
+      model={result.model}
+      sourcePaths={result.results.map((item) => item.path)}
+    />
   </div>;
 }
 
-function RagResult({ result }: { result: SearchResponse }) {
+function RagResult({ knowledgeBaseId, result }: { knowledgeBaseId: number | null; result: SearchResponse }) {
   const [activeRef, setActiveRef] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -846,7 +858,121 @@ function RagResult({ result }: { result: SearchResponse }) {
     {result.answer ? <RichText className="answer-copy" content={result.answer} onCite={focusReference} /> : null}
     {result.model_error ? <p className="result-fallback"><AlertCircle size={13} /> {result.model_error}</p> : null}
     {result.results.length ? <div className="rag-result-list" ref={listRef}>{result.results.map((item, index) => <article className={activeRef === index + 1 ? "active" : ""} data-ref-anchor={index + 1} key={item.chunk_id ?? `${item.document_id}-${item.chunk_index}`}><div><strong>{item.title}</strong><span>{Math.round(item.score * 100)}%</span></div><p>{item.chunk}</p><div className="rag-source-meta"><small>{[item.source_platform, item.source_author, item.source_account ? `@${item.source_account}` : null].filter(Boolean).join(" · ") || `来源 #${item.document_id}`} · 片段 {item.chunk_index ?? "-"}</small>{item.source_policy && item.source_policy !== "full_text" ? <small className="source-policy">{item.source_policy === "excerpt" ? "节选快照" : "链接说明"}</small> : null}{item.source_url ? <a href={item.source_url} target="_blank" rel="noreferrer"><ExternalLink size={13} /> 原帖</a> : null}</div></article>)}</div> : <p className="answer-copy">没有找到匹配的原始资料片段。</p>}
+    <FeedbackControl
+      knowledgeBaseId={knowledgeBaseId}
+      mode="rag"
+      query={result.query}
+      answer={result.answer ?? ""}
+      answerMode={result.answer_mode}
+      model={result.model}
+      sourcePaths={result.results.map((item) => `document:${item.document_id}#${item.chunk_index ?? "-"}`)}
+    />
   </div>;
+}
+
+/**
+ * One rating per answer. A thumbs down asks why before it is recorded, because a
+ * bare negative tells a later evaluation nothing it can act on.
+ */
+function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, query, sourcePaths }: {
+  answer: string;
+  answerMode: string | null;
+  knowledgeBaseId: number | null;
+  mode: "wiki" | "rag";
+  model: string | null;
+  query: string;
+  sourcePaths: string[];
+}) {
+  const [rating, setRating] = useState<1 | -1 | 0>(0);
+  const [note, setNote] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // A new or re-run answer starts from a clean rating.
+  useEffect(() => {
+    setRating(0);
+    setNote("");
+    setAsking(false);
+    setState("idle");
+  }, [query, answer]);
+
+  // The rating line sits at the bottom of a scrollable sheet, so the box that
+  // opens after a thumbs down would otherwise appear below the fold.
+  useEffect(() => {
+    if (asking) rootRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [asking]);
+
+  async function send(next: 1 | -1, reason: string) {
+    if (!knowledgeBaseId) return;
+    setRating(next);
+    setAsking(false);
+    setState("saving");
+    try {
+      await submitQueryFeedback(knowledgeBaseId, {
+        mode,
+        query,
+        rating: next,
+        note: reason.trim() || null,
+        answer: answer.slice(0, 8_000) || null,
+        answer_mode: answerMode,
+        model,
+        source_paths: sourcePaths.slice(0, 50),
+      });
+      setState("saved");
+    } catch {
+      setState("failed");
+    }
+  }
+
+  return (
+    <div className="feedback" ref={rootRef}>
+      <div className="feedback-ask">
+        <span>这个回答有用吗</span>
+        <button
+          type="button"
+          className={`feedback-button positive ${rating === 1 ? "selected" : ""}`}
+          title="有用"
+          aria-label="有用"
+          disabled={state === "saving"}
+          onClick={() => void send(1, "")}
+        >
+          <ThumbsUp size={13} />
+        </button>
+        <button
+          type="button"
+          className={`feedback-button negative ${rating === -1 ? "selected" : ""}`}
+          title="没用"
+          aria-label="没用"
+          disabled={state === "saving"}
+          onClick={() => { setRating(-1); setState("idle"); setAsking(true); }}
+        >
+          <ThumbsDown size={13} />
+        </button>
+        {state === "saved" ? <span className="feedback-saved">已记录</span> : null}
+        {state === "failed" ? <span className="feedback-failed">记录失败，请重试</span> : null}
+      </div>
+      {asking ? (
+        <form
+          className="feedback-note"
+          onSubmit={(event) => { event.preventDefault(); void send(-1, note); }}
+        >
+          <textarea
+            autoFocus
+            rows={2}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="哪里不对？可以留空"
+            disabled={state === "saving"}
+          />
+          <div className="feedback-note-actions">
+            <button type="button" className="text-button" onClick={() => { setAsking(false); setRating(0); }}>取消</button>
+            <button type="submit" className="secondary-button compact" disabled={state === "saving"}>提交反馈</button>
+          </div>
+        </form>
+      ) : null}
+    </div>
+  );
 }
 
 /* --------------------------------------------------------------------------

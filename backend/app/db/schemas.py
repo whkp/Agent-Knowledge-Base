@@ -399,3 +399,57 @@ class WikiStatusResponse(BaseModel):
     orphan_count: int
     broken_link_count: int
     recent_activity: list[str]
+
+
+class QueryFeedbackCreate(BaseModel):
+    """A rating of one answer. Only a thumbs up or a thumbs down is accepted."""
+
+    mode: Literal["wiki", "rag"] = "wiki"
+    query: str = Field(min_length=1, max_length=2_000)
+    rating: Literal[-1, 1]
+    note: str | None = Field(default=None, max_length=2_000)
+    answer: str | None = Field(default=None, max_length=8_000)
+    answer_mode: str | None = Field(default=None, max_length=20)
+    model: str | None = Field(default=None, max_length=200)
+    source_paths: list[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Query cannot be empty.")
+        return value
+
+    @field_validator("note")
+    @classmethod
+    def validate_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class QueryFeedbackRead(BaseModel):
+    id: int
+    knowledge_base_id: int
+    mode: str
+    query: str
+    rating: int
+    note: str | None
+    answer: str | None
+    answer_mode: str | None
+    model: str | None
+    source_paths: list[str]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QueryFeedbackPage(BaseModel):
+    items: list[QueryFeedbackRead]
+    total: int
+    page: int
+    page_size: int
+    positive: int
+    negative: int

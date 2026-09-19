@@ -11,3 +11,4 @@ All notable changes to AgentKB will be documented here.
 - Added process-local workbench model configuration and connection testing without persisting API keys in Markdown, SQLite, or the browser.
 - Made MCP base retrieval tools model-free by default and added explicit `synthesize_knowledge` for opt-in Backend model synthesis.
 - Added `docs/ARCHITECTURE.md` as the current implementation design and contract reference.
+- Added per-answer feedback (thumbs up / thumbs down with an optional reason) as the signal future retrieval evaluation and strategy evolution will read. Ratings live in SQLite and are never written into the Markdown workspace.

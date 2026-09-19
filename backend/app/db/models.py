@@ -86,3 +86,32 @@ class DocumentChunk(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+class QueryFeedback(Base):
+    """One rating of one answer.
+
+    This is the only signal a retrieval strategy can evolve on, so every row keeps
+    enough context to replay the query later: what was asked, which pages were cited,
+    whether a model was involved, and what the rating was. It is deliberately business
+    data in SQLite rather than a wiki page, because a rating is not knowledge and must
+    not enter the Markdown workspace.
+    """
+
+    __tablename__ = "query_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    knowledge_base_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_paths: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

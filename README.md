@@ -38,6 +38,7 @@ The Markdown workspace is the long-lived source of truth. SQLite preserves appli
 - Optional OpenAI-compatible synthesis for page and raw-source queries, with citations and deterministic fallback.
 - Page queries that follow `[[wikilinks]]` one hop beyond the direct matches, marking those pages `related`.
 - Wiki lint for broken links, orphan pages, and missing summaries.
+- A thumbs up or thumbs down on every answer, with an optional reason when a thumbs down is recorded. Ratings are business data in SQLite and never enter the wiki.
 - MCP tools for source ingestion, page browsing, retrieval-first querying, status, linting, and explicit optional synthesis.
 - Optional ChromaDB and multilingual embedding retrieval for both ordinary documents and traceable external source snapshots.
 
