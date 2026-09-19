@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "bench:layout": "node scripts/bench-graph-layout.mjs"
   },
   "dependencies": {
     "@fontsource-variable/newsreader": "^5.3.0",

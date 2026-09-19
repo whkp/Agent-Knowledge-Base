@@ -31,6 +31,7 @@ import { createKnowledgeBase, listKnowledgeBases } from "./api/knowledge";
 import { getLLMConfig, testLLMConfig, updateLLMConfig } from "./api/llm";
 import { listQueryFeedback, submitQueryFeedback } from "./api/feedback";
 import type { QueryFeedback } from "./api/feedback";
+import { layoutGraph } from "./graph/layout";
 import { searchKnowledgeBase } from "./api/search";
 import { getWikiGraph, getWikiStatus, lintWiki, listAllWikiPages, listRetrievalStrategies, queryWiki, readWikiPage, saveWikiPage } from "./api/wiki";
 import type { RetrievalStrategy } from "./api/wiki";
@@ -1072,126 +1073,8 @@ function FeedbackControl({ answer, answerMode, citations, knowledgeBaseId, mode,
 type GraphNode = WikiGraph["nodes"][number];
 type PlacedNode = GraphNode & { x: number; y: number; radius: number; degree: number };
 
-/** Deterministic PRNG so the graph keeps the same shape between renders. */
-function seededRandom(seed: number): () => number {
-  let state = seed;
-  return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/**
- * Fruchterman-Reingold, hand-rolled. A wiki is normally tens of pages, so an
- * O(n²) pass is cheap and the graph stays free of a WebGL layout dependency.
- */
-function layoutGraph(graph: WikiGraph, width: number, height: number): PlacedNode[] {
-  const nodes = graph.nodes;
-  const count = nodes.length;
-  if (!count) return [];
-
-  const index = new Map(nodes.map((node, position) => [node.id, position]));
-  const links = graph.edges
-    .map((edge) => [index.get(edge.source), index.get(edge.target)] as const)
-    .filter((pair): pair is readonly [number, number] => pair[0] !== undefined && pair[1] !== undefined);
-  const degrees = new Array<number>(count).fill(0);
-  for (const [a, b] of links) {
-    degrees[a] += 1;
-    degrees[b] += 1;
-  }
-
-  const random = seededRandom(20260822);
-  const xs = new Float64Array(count);
-  const ys = new Float64Array(count);
-  const dx = new Float64Array(count);
-  const dy = new Float64Array(count);
-  for (let i = 0; i < count; i += 1) {
-    const angle = (i / count) * Math.PI * 2 + random() * 0.6;
-    const spread = Math.min(width, height) * (0.2 + random() * 0.2);
-    xs[i] = width / 2 + Math.cos(angle) * spread;
-    ys[i] = height / 2 + Math.sin(angle) * spread;
-  }
-
-  const ideal = Math.sqrt((width * height) / count) * 0.72;
-  const padding = 62;
-  let temperature = Math.min(width, height) / 6;
-  const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
-
-  for (let step = 0; step < 240; step += 1) {
-    dx.fill(0);
-    dy.fill(0);
-    for (let i = 0; i < count; i += 1) {
-      for (let j = i + 1; j < count; j += 1) {
-        let vx = xs[i] - xs[j];
-        let vy = ys[i] - ys[j];
-        let distance = Math.hypot(vx, vy);
-        if (distance < 0.01) {
-          vx = random() - 0.5;
-          vy = random() - 0.5;
-          distance = 0.01;
-        }
-        const force = (ideal * ideal) / distance;
-        const ux = (vx / distance) * force;
-        const uy = (vy / distance) * force;
-        dx[i] += ux;
-        dy[i] += uy;
-        dx[j] -= ux;
-        dy[j] -= uy;
-      }
-    }
-    for (const [a, b] of links) {
-      const vx = xs[a] - xs[b];
-      const vy = ys[a] - ys[b];
-      const distance = Math.max(0.01, Math.hypot(vx, vy));
-      const force = (distance * distance) / ideal;
-      const ux = (vx / distance) * force;
-      const uy = (vy / distance) * force;
-      dx[a] -= ux;
-      dy[a] -= uy;
-      dx[b] += ux;
-      dy[b] += uy;
-    }
-    for (let i = 0; i < count; i += 1) {
-      dx[i] += (width / 2 - xs[i]) * 0.015;
-      dy[i] += (height / 2 - ys[i]) * 0.015;
-    }
-    temperature *= 0.985;
-    for (let i = 0; i < count; i += 1) {
-      const distance = Math.hypot(dx[i], dy[i]) || 1;
-      const limited = Math.min(distance, temperature);
-      // Keep the layout inside the frame; otherwise the graph drifts far past the
-      // viewBox and the final fit shrinks every node into a blob.
-      xs[i] = clamp(xs[i] + (dx[i] / distance) * limited, padding, width - padding);
-      ys[i] = clamp(ys[i] + (dy[i] / distance) * limited, padding, height - padding);
-    }
-  }
-
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const spanX = Math.max(1, maxX - minX);
-  const spanY = Math.max(1, maxY - minY);
-  // Already inside the frame, so this only centres the result and nudges a
-  // sparse graph up slightly towards the available area.
-  const scale = Math.min(1.2, (width - padding * 2) / spanX, (height - padding * 2) / spanY);
-  const offsetX = (width - spanX * scale) / 2 - minX * scale;
-  const offsetY = (height - spanY * scale) / 2 - minY * scale;
-
-  return nodes.map((node, i) => ({
-    ...node,
-    x: xs[i] * scale + offsetX,
-    y: ys[i] * scale + offsetY,
-    radius: Math.min(15, 4.4 + Math.sqrt(degrees[i]) * 2.6),
-    degree: degrees[i],
-  }));
-}
-
-/** Rough advance width, so label collision can be estimated without measuring. */
 function labelWidth(label: string): number {
-  let width = 6;
+  let width = 0;
   for (const char of label) width += /[\u3400-\u9fff\uff00-\uffef]/.test(char) ? 11 : 6.2;
   return width;
 }
@@ -1205,7 +1088,7 @@ function GraphSheet({ graph, onOpenPage }: { graph: WikiGraph | null; onOpenPage
   const [hovered, setHovered] = useState<string | null>(null);
   const width = 960;
   const height = 620;
-  const placed = useMemo(() => (graph ? layoutGraph(graph, width, height) : []), [graph]);
+  const placed = useMemo(() => (graph ? layoutGraph(graph.nodes, graph.edges, width, height) : []), [graph]);
 
   const adjacency = useMemo(() => {
     const map = new Map<string, Set<string>>();

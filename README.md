@@ -44,7 +44,7 @@ The Markdown workspace is the long-lived source of truth. SQLite preserves appli
 - MCP tools for source ingestion, page browsing, retrieval-first querying through named strategies, status, linting, answer feedback, and explicit optional synthesis.
 - Optional ChromaDB and multilingual embedding retrieval for both ordinary documents and traceable external source snapshots.
 
-Current product screenshots are kept under `demo/` and show the workbench, page-first querying with citations, the derived link graph, and the optional raw-source RAG mode.
+Current product screenshots are kept under `demo/` and show the workbench, page-first querying with citations, the derived link graph, the feedback sheet, and the optional raw-source RAG mode.
 
 The interactive source adapter accepts text and `.txt` files. A local JSON/JSONL snapshot importer also accepts externally collected X, XiaoHongShu, or web source text without adding browser-login dependencies to the Backend. PDF, DOCX, and direct URL acquisition are the next input formats.
 
@@ -72,6 +72,10 @@ The derived link graph. Structure comes from `[[wikilinks]]`, so a workspace who
 ![AgentKB knowledge graph](demo/agentkb-knowledge-graph.png)
 
 Raw-source RAG stays available when an answer needs the underlying material rather than the maintained pages. Each fragment keeps its source metadata, so a hit can be traced back to the snapshot:
+
+Ratings are the retrieval loop's only evaluation signal, so they are readable in the workbench instead of only through the API. A thumbs down can name which citation was wrong, which is what lets replay judge at page level:
+
+![AgentKB feedback sheet](demo/agentkb-feedback.png)
 
 ![AgentKB RAG query](demo/agentkb-rag-query.png)
 
