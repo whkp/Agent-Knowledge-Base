@@ -90,7 +90,6 @@ docs/          Design, retrieval and installation references (each in English an
 skills/        Agent skills that operate the Backend through its APIs
 proposals/     Reviewable retrieval-strategy proposals produced from recorded feedback
 AGENTS.md      Development guide for contributors and coding agents
-TODO.md        The working plan: what is next, why, and how to verify it
 ```
 
 Documentation is split by purpose:
@@ -103,7 +102,6 @@ Documentation is split by purpose:
 | Local installation | [中文](docs/LOCAL_INSTALLATION.md) · [English](docs/LOCAL_INSTALLATION_EN.md) | deployment, MCP client configuration, troubleshooting |
 | Methodology | [llm-wiki.md](llm-wiki.md) | the Markdown-first concept this project implements |
 | Agent skill | [skills/agentkb-retrieval](skills/agentkb-retrieval/SKILL.md) | the same loop, written as a procedure an external agent can follow |
-| Plan · 中文 | [TODO.md](TODO.md) | what is next, why, how to verify it, and what the project deliberately does not build |
 
 ## Quick Start
 
@@ -274,16 +272,18 @@ See [docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md) for the full local 
 
 ## Roadmap
 
-[`TODO.md`](TODO.md) is the working plan and the single source of truth for what comes next.
-Its headline items today:
+The next changes, in the order their evidence justifies them:
 
 1. Move ingest into a background queue with progress. It still blocks the request, and model-backed topic maintenance runs inside that request.
 2. Content-level lint. Today lint only checks structure (broken links, orphan pages, missing summaries), not what the pages actually claim.
 3. Replay `mode="rag"` feedback, so the raw-source path is compared the same way as the page path.
 4. Beyond a size threshold, draw only hubs and their neighbours. An 800-page graph opens in 315ms now, but it is still a hairball.
 
-The file also records what the project deliberately does not build, and why — starting with
-an agent inside the backend.
+Three things this project deliberately does not build, and why: an agent inside the backend
+(it duplicates the calling Agent and violates the MCP contract), automatic promotion of a
+retrieval strategy (a person reviews every change, even a one-line one), and merging two
+sources that carry identical text (their URLs, platforms and capture times are exactly what
+provenance exists to preserve).
 
 ## Project Status And Naming
 

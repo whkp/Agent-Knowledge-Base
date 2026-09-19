@@ -1,6 +1,6 @@
 /**
  * Measures the page-graph layout on synthetic workspaces, in node, so the numbers
- * quoted in TODO.md and the CHANGELOG can be reproduced:
+ * quoted in the CHANGELOG can be reproduced:
  *
  *     npm run bench:layout             # 25 / 111 / 400 / 800 pages
  *     npm run bench:layout 2000        # a specific size

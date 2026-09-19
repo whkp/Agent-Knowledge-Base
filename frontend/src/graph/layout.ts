@@ -2,10 +2,10 @@
  * Force-directed page layout, hand-rolled and deterministic.
  *
  * A wiki is normally tens of pages, so the simplest O(n²) repulsion pass was fine
- * and the graph stayed free of a WebGL layout dependency. A workspace with
- * hundreds of pages made that assumption visible (see `TODO.md`), so the
- * repulsion pass now uses a Barnes-Hut approximation while keeping the same
- * seeded start, the same forces and the same clamped frame.
+ * and the graph stayed free of a WebGL layout dependency. A workspace with several
+ * hundred pages made that assumption visible — opening the graph took about a second
+ * in a production build — so the repulsion pass now uses a Barnes-Hut approximation
+ * while keeping the same seeded start, the same forces and the same clamped frame.
  */
 
 export type LayoutNode = { id: string };
