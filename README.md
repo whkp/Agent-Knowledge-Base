@@ -87,14 +87,14 @@ AGENTS.md      Development guide for contributors and coding agents
 
 Documentation is split by purpose:
 
-| Document | Covers |
-| --- | --- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | implementation design, data ownership, model configuration hierarchy, query and API contracts |
-| [docs/RETRIEVAL.md](docs/RETRIEVAL.md) | how a question becomes evidence: tokenising, BM25 scoring, vector floor, the five strategies, and how to add one |
-| [docs/SELF_EVOLUTION.md](docs/SELF_EVOLUTION.md) | the 👍/👎 → replay → proposal → review loop, who owns each step, and the failure modes it guards against |
-| [docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md) | deployment |
-| [llm-wiki.md](llm-wiki.md) | the Markdown-first concept this project implements |
-| [skills/agentkb-retrieval](skills/agentkb-retrieval/SKILL.md) | the same loop, written as a procedure an external agent can follow |
+| Document | Languages | Covers |
+| --- | --- | --- |
+| Architecture | [中文](docs/ARCHITECTURE.md) · [English](docs/ARCHITECTURE_EN.md) | implementation design, data ownership, model configuration hierarchy, query and API contracts |
+| Retrieval | [English](docs/RETRIEVAL.md) · [中文](docs/RETRIEVAL_CN.md) | how a question becomes evidence: tokenising, BM25 scoring, the vector floor, the five strategies, and how to add one |
+| Self-evolution | [English](docs/SELF_EVOLUTION.md) · [中文](docs/SELF_EVOLUTION_CN.md) | the 👍/👎 → replay → proposal → review loop, who owns each step, and the failure modes it guards against |
+| Local installation | [中文](docs/LOCAL_INSTALLATION.md) · [English](docs/LOCAL_INSTALLATION_EN.md) | deployment, MCP client configuration, troubleshooting |
+| Methodology | [llm-wiki.md](llm-wiki.md) | the Markdown-first concept this project implements |
+| Agent skill | [skills/agentkb-retrieval](skills/agentkb-retrieval/SKILL.md) | the same loop, written as a procedure an external agent can follow |
 
 ## Quick Start
 

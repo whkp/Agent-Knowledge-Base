@@ -1,5 +1,7 @@
 # Self-evolution without a self-modifying agent
 
+[中文](SELF_EVOLUTION_CN.md) · **English**
+
 What "self-evolution" means in AgentKB, who does each part of it, and why the project does
 **not** put an agent inside the backend.
 
@@ -127,7 +129,7 @@ disliked case. Even then the proposal says "worth a human look", not "merge this
 
 ## Worked example (real numbers)
 
-Recorded feedback on a 25-page workspace, six wiki ratings (four 👍, two 👎), replaying
+Recorded feedback on a 25-page workspace, 6 wiki ratings (4 👍, 2 👎), replaying
 all five strategies through `propose_strategy_change.py`:
 
 | Strategy | 👍 citations retained | Regressions vs default | New changes vs default | avg linked pages | avg hops |

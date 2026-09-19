@@ -1,5 +1,7 @@
 # 本地安装部署指南
 
+**中文** · [English](LOCAL_INSTALLATION_EN.md)
+
 本文档用于在本机安装并运行 `AgentKB`，包含：
 
 - 本地知识库服务安装：Backend + Frontend
@@ -391,6 +393,9 @@ MCP Server 提供工具：
 
 ```text
 search_knowledge_base
+search_with_strategy
+list_retrieval_strategies
+list_answer_feedback
 list_knowledge_bases
 add_text_document
 add_source_to_wiki
@@ -536,6 +541,7 @@ Backend 普通搜索和流式搜索
 MCP 工具正常与错误路径
 Backend Wiki 工作区、页面查询、lint 和图谱
 Backend OpenAI-compatible 模型配置、模型综合与本地回退
+Backend 检索打分、策略、反馈与回放/提案工具
 ```
 
 前端构建测试：
@@ -628,6 +634,10 @@ BACKEND_TIMEOUT_SECONDS=30
 10. MCP Server 工具
 11. Backend 和 MCP 测试
 12. 本地真实后端验证脚本
+13. Markdown wiki 工作区：来源快照、来源页、主题页、索引和活动日志
+14. 可选的主题页模型综合：在事务提交后执行，失败只记日志
+15. 命名检索策略、自适应链接扩展与可选的页面向量召回
+16. 回答反馈、回放对比与策略提案脚本
 ```
 
 后续重点优化：
@@ -636,9 +646,8 @@ BACKEND_TIMEOUT_SECONDS=30
 1. 将当前 OpenAI-compatible 模型综合升级为流式回答生成
 2. 增加更多 Provider 原生适配与模型管理
 3. 增加 PDF/DOCX 上传
-4. 增加 BM25 + 向量混合检索
-5. 增加 rerank
-6. 增加 Docker Compose 一键部署
+4. 增加 rerank
+5. 增加 Docker Compose 一键部署
 ```
 
 ## 14. Codex MCP 配置示例

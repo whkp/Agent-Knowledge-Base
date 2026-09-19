@@ -1,5 +1,7 @@
 # Retrieval and strategies
 
+[中文](RETRIEVAL_CN.md) · **English**
+
 How AgentKB turns a question into evidence, which knobs exist, and how to change them
 without guessing. Numbers quoted here were measured on a local workspace of 25 pages with
 the default multilingual embedding model; treat them as calibration, not constants.

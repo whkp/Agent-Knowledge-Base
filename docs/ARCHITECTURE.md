@@ -1,5 +1,7 @@
 # AgentKB Architecture
 
+**中文** · [English](ARCHITECTURE_EN.md)
+
 本文档描述 AgentKB 当前实现的架构、数据边界和接口约束。它是项目实现设计的依据；[llm-wiki.md](../llm-wiki.md) 保留为产品方法论和长期演进参考，不替代本文档的具体契约。
 
 ## 1. 目标与边界
@@ -211,7 +213,7 @@ MCP 的目标是让 Codex、Claude Code 等外部 Agent 接入可追溯知识，
 
 - 反馈是**业务数据**，写入 SQLite 的 `query_feedback`；它不是知识，**不得写入 wiki 页面或 Markdown 工作区**，也不改变当次回答。
 - 记录是 append-only：用户改主意会产生新行，而不是覆盖旧行，这样"判断变化"本身也是可分析的数据。
-- `GET .../feedback` 读回信号，并返回 `positive` / `negative` 汇总计数。目前只有接口，工作台与 MCP 尚未消费它。
+- `GET .../feedback` 读回信号，并返回 `positive` / `negative` 汇总计数。工作台写入评分时会带上产生该回答的策略，MCP 通过 `list_answer_feedback` 暴露读取侧；消费方见 5.7 与 5.8。
 
 
 
@@ -337,9 +339,11 @@ Content-Type: application/json
 - 模型自动修改多页 wiki、变更差异预览、审批和回滚工作流。
 - 多用户的 Provider 密钥管理、权限模型、审计和租户隔离。
 - PDF、DOCX、URL、图片等来源适配器。
-- 混合检索、rerank、原生 Provider SDK 适配和模型目录。
+- rerank、原生 Provider SDK 适配和模型目录。
 
-推荐演进顺序：先定义模型流式 API 事件契约并避免旧 SSE 路径丢弃模型回答；再加入可审阅的 wiki 变更提案；最后扩展检索、来源适配和多用户部署能力。
+已经先行交付并在上文记录：带自适应链接扩展与可选向量召回的命名检索策略（5.6）、作为评估信号的回答反馈（5.5）、以及把信号变成受评审改动的回放与提案闭环（5.7、5.8）。
+
+余下部分的推荐顺序：先定义模型流式 API 事件契约，且不要让旧 SSE 路径吞掉模型回答；再加入可审阅的 wiki 变更提案；最后扩展检索、来源适配和多用户部署能力。
 
 ## 10. 变更要求
 

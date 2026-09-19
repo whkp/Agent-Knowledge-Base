@@ -87,14 +87,14 @@ AGENTS.md      面向贡献者与编码 Agent 的开发指南
 
 文档按用途拆分：
 
-| 文档 | 内容 |
-| --- | --- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 实现设计、数据归属、模型配置优先级、查询与 API 契约 |
-| [docs/RETRIEVAL.md](docs/RETRIEVAL.md) | 问题怎么变成证据：分词、BM25 打分、向量下限、五个策略，以及怎么新增一个 |
-| [docs/SELF_EVOLUTION.md](docs/SELF_EVOLUTION.md) | 👍/👎 → 回放 → 提案 → 评审 的闭环、各步由谁负责、以及它防住了哪些失效模式 |
-| [docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md) | 部署 |
-| [llm-wiki.md](llm-wiki.md) | 本项目实现的 Markdown 优先方法论 |
-| [skills/agentkb-retrieval](skills/agentkb-retrieval/SKILL.md) | 同一条闭环，写成外部 Agent 可以照做的流程 |
+| 文档 | 语言 | 内容 |
+| --- | --- | --- |
+| 架构 | [中文](docs/ARCHITECTURE.md) · [English](docs/ARCHITECTURE_EN.md) | 实现设计、数据归属、模型配置优先级、查询与 API 契约 |
+| 检索 | [中文](docs/RETRIEVAL_CN.md) · [English](docs/RETRIEVAL.md) | 问题怎么变成证据：分词、BM25 打分、向量下限、五个策略，以及怎么新增一个 |
+| 自进化 | [中文](docs/SELF_EVOLUTION_CN.md) · [English](docs/SELF_EVOLUTION.md) | 👍/👎 → 回放 → 提案 → 评审 的闭环、各步由谁负责、以及它防住了哪些失效模式 |
+| 本地安装 | [中文](docs/LOCAL_INSTALLATION.md) · [English](docs/LOCAL_INSTALLATION_EN.md) | 部署、MCP 客户端配置、常见问题 |
+| 方法论 | [llm-wiki.md](llm-wiki.md) | 本项目实现的 Markdown 优先方法论 |
+| Agent skill | [skills/agentkb-retrieval](skills/agentkb-retrieval/SKILL.md) | 同一条闭环，写成外部 Agent 可以照做的流程 |
 
 ## 快速开始
 
