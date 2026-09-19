@@ -9,6 +9,7 @@ export interface QueryFeedbackInput {
   answer?: string | null;
   answer_mode?: string | null;
   model?: string | null;
+  strategy_id?: string | null;
   source_paths?: string[];
 }
 

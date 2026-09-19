@@ -8,6 +8,7 @@ from app.api.document_routes import router as document_router
 from app.api.feedback_routes import router as feedback_router
 from app.api.knowledge_routes import router as knowledge_router
 from app.api.llm_routes import router as llm_router
+from app.api.retrieval_routes import router as retrieval_router
 from app.api.search_routes import router as search_router
 from app.api.wiki_routes import router as wiki_router
 from app.config import get_settings
@@ -40,6 +41,7 @@ def create_app(create_tables_on_startup: bool = True) -> FastAPI:
     app.include_router(wiki_router, prefix="/api")
     app.include_router(llm_router, prefix="/api")
     app.include_router(feedback_router, prefix="/api")
+    app.include_router(retrieval_router, prefix="/api")
 
     @app.get("/health")
     def health_check() -> dict[str, str]:

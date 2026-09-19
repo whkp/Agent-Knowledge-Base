@@ -62,7 +62,12 @@ def write_wiki_page(knowledge_base_id: int, page_path: str, payload: WikiPageUps
 @router.post("/query", response_model=WikiQueryResponse)
 def query_wiki(knowledge_base_id: int, payload: WikiQueryRequest, db: Session = Depends(get_db)):
     _ensure_kb(db, knowledge_base_id)
-    return wiki_service.query_wiki(knowledge_base_id, payload.query, payload.top_k, payload.save_as, payload.llm)
+    try:
+        return wiki_service.query_wiki(
+            knowledge_base_id, payload.query, payload.top_k, payload.save_as, payload.llm, payload.strategy
+        )
+    except wiki_service.WikiWorkspaceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post("/lint", response_model=WikiLintResponse)

@@ -53,6 +53,22 @@ _DOCUMENT_COLUMN_MIGRATIONS = {
 }
 
 
+_FEEDBACK_COLUMN_MIGRATIONS: dict[str, str] = {
+    "strategy_id": "VARCHAR(40)",
+}
+
+
+def _add_missing_columns(bind: Engine, inspector, tables: set[str], table: str, migrations: dict[str, str]) -> None:
+    """Additive, idempotent column additions for databases created before a field existed."""
+    if table not in tables:
+        return
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    with bind.begin() as connection:
+        for column, definition in migrations.items():
+            if column not in existing:
+                connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def ensure_schema_compatibility(bind: Engine) -> None:
     """Apply additive SQLite-safe migrations for installations created before Alembic.
 
@@ -63,7 +79,9 @@ def ensure_schema_compatibility(bind: Engine) -> None:
     """
 
     inspector = inspect(bind)
-    if "documents" not in inspector.get_table_names():
+    tables = set(inspector.get_table_names())
+    _add_missing_columns(bind, inspector, tables, "query_feedback", _FEEDBACK_COLUMN_MIGRATIONS)
+    if "documents" not in tables:
         return
 
     existing_columns = {column["name"] for column in inspector.get_columns("documents")}

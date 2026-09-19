@@ -40,7 +40,20 @@ export function saveWikiPage(knowledgeBaseId: number, path: string, content: str
   });
 }
 
-export function queryWiki(knowledgeBaseId: number, payload: { query: string; top_k?: number; save_as?: string; llm?: LLMConfigurationInput }): Promise<WikiQueryResponse> {
+export interface RetrievalStrategy {
+  id: string;
+  label: string;
+  description: string;
+  hops: number | string;
+  neighbour_limit: number;
+}
+
+/** The retrieval configurations a query may ask for. The set is fixed by the backend. */
+export function listRetrievalStrategies(): Promise<{ items: RetrievalStrategy[] }> {
+  return requestJson<{ items: RetrievalStrategy[] }>("/api/retrieval-strategies");
+}
+
+export function queryWiki(knowledgeBaseId: number, payload: { query: string; top_k?: number; save_as?: string; strategy?: string; llm?: LLMConfigurationInput }): Promise<WikiQueryResponse> {
   return requestJson<WikiQueryResponse>(`/api/knowledge-bases/${knowledgeBaseId}/wiki/query`, {
     method: "POST",
     body: JSON.stringify(payload),

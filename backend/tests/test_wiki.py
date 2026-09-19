@@ -1,8 +1,10 @@
-from fastapi.testclient import TestClient
-
+from datetime import datetime, timezone
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from app.config import get_settings
+from app.db.models import QueryFeedback
 from app.db.schemas import LLMConfigurationInput
 from app.services import llm_service
 from tests.conftest import create_kb
@@ -400,3 +402,495 @@ def test_removing_the_last_source_removes_the_topic_page(client: TestClient):
     assert client.delete(f"/api/documents/{created['id']}").status_code == 204
 
     assert client.get(f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/rag-检索策略.md").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Query scoring: CJK bigrams and coverage
+# ---------------------------------------------------------------------------
+
+
+def test_search_tokens_split_cjk_into_bigrams_and_keep_latin_words():
+    from app.services.wiki_service import _search_tokens
+
+    assert _search_tokens("如何配置资产") == ("如何", "何配", "配置", "置资", "资产")
+    assert _search_tokens("RAG 检索") == ("rag", "检索")
+    assert _search_tokens("春") == ("春",)
+    assert _search_tokens("资产 资产") == ("资产",), "repeated terms collapse"
+    assert _search_tokens("  ") == ()
+
+
+def test_query_finds_pages_across_word_order_and_inserted_particles(client: TestClient):
+    """如何配置资产 must reach a page about 资产配置; a plain substring match cannot."""
+    kb = create_kb(client, "投资笔记")
+    base = f"/api/knowledge-bases/{kb['id']}/wiki/pages"
+    client.put(f"{base}/wiki/topics/资产配置入门.md", json={"path": "wiki/topics/资产配置入门.md", "content": "# 资产配置入门\n\n先建立应急金，再考虑权益类资产的比例。\n"})
+    client.put(f"{base}/wiki/topics/天气.md", json={"path": "wiki/topics/天气.md", "content": "# 天气\n\n今天多云，适合散步。\n"})
+
+    results = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "如何配置资产"}).json()["results"]
+
+    paths = {item["path"] for item in results}
+    assert "wiki/topics/资产配置入门.md" in paths
+    assert "wiki/topics/天气.md" not in paths
+
+
+def test_query_matches_across_a_particle_inside_the_phrase(client: TestClient):
+    kb = create_kb(client, "AI 研究")
+    base = f"/api/knowledge-bases/{kb['id']}/wiki/pages"
+    client.put(f"{base}/wiki/topics/rag.md", json={"path": "wiki/topics/rag.md", "content": "# RAG 检索策略\n\n向量召回要配合关键词召回使用。\n"})
+
+    results = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "检索的策略"}).json()["results"]
+
+    assert results and results[0]["path"] == "wiki/topics/rag.md"
+
+
+def test_title_match_outranks_a_body_only_match(client: TestClient):
+    kb = create_kb(client, "投资笔记")
+    base = f"/api/knowledge-bases/{kb['id']}/wiki/pages"
+    client.put(f"{base}/wiki/topics/资产配置入门.md", json={"path": "wiki/topics/资产配置入门.md", "content": "# 资产配置入门\n\n先建立应急金。\n"})
+    client.put(f"{base}/wiki/topics/随笔.md", json={"path": "wiki/topics/随笔.md", "content": "# 随笔\n\n今天和朋友聊到资产配置这个话题。\n"})
+
+    results = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "资产配置"}).json()["results"]
+
+    assert results[0]["path"] == "wiki/topics/资产配置入门.md"
+    assert results[0]["score"] > results[1]["score"]
+
+
+def test_score_does_not_grow_with_query_length(client: TestClient):
+    """Coverage, not raw counts: a long query must not push every page near 1.0."""
+    kb = create_kb(client, "投资笔记")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/资产配置入门.md",
+        json={"path": "wiki/topics/资产配置入门.md", "content": "# 资产配置入门\n\n先建立应急金，再考虑权益类资产的比例。\n"},
+    )
+
+    short = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "资产配置"}).json()["results"][0]
+    long = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "资产配置应该怎么开始比较稳妥并且长期坚持下来"},
+    ).json()["results"][0]
+
+    assert 0.0 < long["score"] < short["score"] <= 0.99
+
+
+# ---------------------------------------------------------------------------
+# Adaptive link expansion
+# ---------------------------------------------------------------------------
+
+
+def chain_workspace(client: TestClient, kb_id: int) -> None:
+    """近 -> 中 -> 远 一条三跳链，用于观察扩展跳数。"""
+    base = f"/api/knowledge-bases/{kb_id}/wiki/pages"
+    client.put(f"{base}/wiki/topics/近.md", json={"path": "wiki/topics/近.md", "content": "# 近\n\n阿尔法关键词。\n\n[[wiki/topics/中]]\n"})
+    client.put(f"{base}/wiki/topics/中.md", json={"path": "wiki/topics/中.md", "content": "# 中\n\n贝塔内容。\n\n[[wiki/topics/远]]\n"})
+    client.put(f"{base}/wiki/topics/远.md", json={"path": "wiki/topics/远.md", "content": "# 远\n\n伽马内容，与查询无关。\n"})
+
+
+def test_confident_match_stays_one_hop(client: TestClient, monkeypatch):
+    monkeypatch.setenv("WIKI_QUERY_DEEP_THRESHOLD", "-1")
+    get_settings.cache_clear()
+    kb = create_kb(client, "链式")
+    chain_workspace(client, kb["id"])
+
+    results = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "阿尔法"}).json()["results"]
+
+    related = {item["path"] for item in results if item["related"]}
+    assert "wiki/topics/中.md" in related
+    assert "wiki/topics/远.md" not in related, "confident matches must not spend budget on a second hop"
+
+
+def test_weak_match_walks_a_second_hop(client: TestClient, monkeypatch):
+    monkeypatch.setenv("WIKI_QUERY_DEEP_THRESHOLD", "1")
+    get_settings.cache_clear()
+    kb = create_kb(client, "链式")
+    chain_workspace(client, kb["id"])
+
+    results = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "阿尔法"}).json()["results"]
+
+    related = {item["path"]: item["score"] for item in results if item["related"]}
+    assert "wiki/topics/远.md" in related, "a weak match may follow one more link"
+    assert related["wiki/topics/远.md"] < related["wiki/topics/中.md"], "distance must cost confidence"
+
+
+def test_second_hop_halves_confidence_again():
+    from app.db.schemas import WikiPageRead
+    from app.services.wiki_service import WikiQueryResult, _related_neighbours
+
+    def page(path: str) -> WikiPageRead:
+        return WikiPageRead(path=path, title=path, page_type="topic", summary="", content="", updated_at=datetime.now(timezone.utc), outbound_links=0)
+
+    pages = {name: page(name) for name in ("a.md", "b.md", "c.md")}
+    seed = [WikiQueryResult(path="a.md", title="a", page_type="topic", summary="", snippet="", score=0.8)]
+    edges = [("a.md", "b.md"), ("b.md", "c.md")]
+
+    one_hop = _related_neighbours(seed, pages, edges, 10, (), hops=1)
+    two_hops = _related_neighbours(seed, pages, edges, 10, (), hops=2)
+
+    assert [item.path for item in one_hop] == ["b.md"]
+    assert {item.path: item.score for item in two_hops} == {"b.md": 0.4, "c.md": 0.2}
+
+
+def test_expansion_respects_the_neighbour_budget(client: TestClient, monkeypatch):
+    monkeypatch.setenv("WIKI_QUERY_DEEP_THRESHOLD", "1")
+    monkeypatch.setenv("WIKI_QUERY_NEIGHBOUR_LIMIT", "1")
+    get_settings.cache_clear()
+    kb = create_kb(client, "链式")
+    chain_workspace(client, kb["id"])
+
+    results = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "阿尔法"}).json()["results"]
+
+    related = [item["path"] for item in results if item["related"]]
+    assert related == ["wiki/topics/中.md"]
+
+
+# ---------------------------------------------------------------------------
+# Named retrieval strategies
+# ---------------------------------------------------------------------------
+
+
+def test_strategies_are_listed_with_their_tradeoffs(client: TestClient):
+    items = client.get("/api/retrieval-strategies").json()["items"]
+
+    ids = [item["id"] for item in items]
+    assert ids == ["auto", "local", "deep", "hybrid", "planned"]
+    assert all(item["description"] for item in items)
+
+
+def test_query_reports_the_strategy_and_the_hops_it_used(client: TestClient):
+    kb = create_kb(client, "链式")
+    chain_workspace(client, kb["id"])
+
+    data = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "阿尔法"}).json()
+
+    assert data["strategy"] == "auto", "the default strategy is applied and reported"
+    assert data["hops"] in {1, 2}
+
+
+def test_local_strategy_skips_link_expansion(client: TestClient):
+    kb = create_kb(client, "链式")
+    chain_workspace(client, kb["id"])
+
+    data = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "阿尔法", "strategy": "local"},
+    ).json()
+
+    assert data["strategy"] == "local"
+    assert data["results"]
+    assert all(not item["related"] for item in data["results"])
+
+
+def test_deep_strategy_always_walks_two_hops(client: TestClient):
+    kb = create_kb(client, "链式")
+    chain_workspace(client, kb["id"])
+
+    data = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "阿尔法", "strategy": "deep"},
+    ).json()
+
+    related = {item["path"] for item in data["results"] if item["related"]}
+    assert data["hops"] == 2
+    assert "wiki/topics/远.md" in related
+
+
+def test_unknown_strategy_is_rejected_with_the_available_ids(client: TestClient):
+    kb = create_kb(client, "链式")
+
+    response = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "阿尔法", "strategy": "smarter"},
+    )
+
+    assert response.status_code == 400
+    assert "auto" in response.json()["detail"] and "deep" in response.json()["detail"]
+
+
+def test_feedback_records_which_strategy_produced_the_answer(client: TestClient):
+    kb = create_kb(client)
+
+    created = client.post(
+        f"/api/knowledge-bases/{kb['id']}/feedback",
+        json={"mode": "wiki", "query": "资产配置", "rating": -1, "strategy_id": "deep"},
+    ).json()
+
+    assert created["strategy_id"] == "deep"
+    listed = client.get(f"/api/knowledge-bases/{kb['id']}/feedback").json()["items"][0]
+    assert listed["strategy_id"] == "deep"
+
+
+# ---------------------------------------------------------------------------
+# Replay tool
+# ---------------------------------------------------------------------------
+
+
+def load_replay_module():
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "replay_queries.py"
+    spec = importlib.util.spec_from_file_location("replay_queries", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_replay_summary_separates_liked_from_disliked():
+    replay = load_replay_module()
+
+    summary = replay.summarise(
+        [
+            {"rating": 1, "recorded": 4, "kept": 4, "changed": False, "related": 2, "hops": 2},
+            {"rating": 1, "recorded": 2, "kept": 1, "changed": True, "related": 0, "hops": 1},
+            {"rating": -1, "recorded": 1, "kept": 1, "changed": False, "related": 0, "hops": 1},
+        ]
+    )
+
+    assert summary["liked"] == 2
+    assert summary["disliked"] == 1
+    assert (summary["kept_on_liked"], summary["recorded_on_liked"]) == (5, 6)
+    assert summary["changed_on_disliked"] == 0
+    assert summary["average_hops"] == round(4 / 3, 2)
+
+
+def test_replay_never_writes_to_the_activity_log(client: TestClient, monkeypatch):
+    """A replay must be invisible in the workspace: no log lines, no saved pages."""
+    from app.services import wiki_service
+
+    replay = load_replay_module()
+    captured: dict = {}
+    original = wiki_service.query_wiki
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(replay.wiki_service, "query_wiki", spy)
+    kb = create_kb(client, "投资笔记")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/资产配置入门.md",
+        json={"path": "wiki/topics/资产配置入门.md", "content": "# 资产配置入门\n\n先建立应急金。\n"},
+    )
+    row = QueryFeedback(
+        knowledge_base_id=kb["id"],
+        mode="wiki",
+        query="资产配置",
+        rating=1,
+        source_paths=["wiki/topics/资产配置入门.md"],
+    )
+
+    result = replay.replay(row, "auto", 8)
+
+    assert captured["record_activity"] is False
+    assert captured["strategy_id"] == "auto"
+    assert result["kept"] == 1 and result["recorded"] == 1
+    log = (Path(get_settings().wiki_root_dir) / f"kb-{kb['id']}" / "log.md").read_text(encoding="utf-8")
+    assert "query |" not in log.split("init |")[-1], "replays stay out of the activity log"
+
+
+# ---------------------------------------------------------------------------
+# Page vectors: a synonym still has to be reachable
+# ---------------------------------------------------------------------------
+
+
+def fake_embeddings(mapping: dict[str, list[float]], dimension: int = 4):
+    """Deterministic stand-in for the embedding model, so tests stay offline."""
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        vectors = []
+        for text in texts:
+            for needle, vector in mapping.items():
+                if needle in text:
+                    vectors.append(vector)
+                    break
+            else:
+                vectors.append([0.0] * dimension)
+        return vectors
+
+    return embed
+
+
+def test_hybrid_strategy_reaches_a_page_the_words_do_not_share(client: TestClient, monkeypatch):
+    """小孩子 and 少年闰土 share no characters; only the vector side can connect them."""
+    from app.services import embedding_service, wiki_service
+
+    wiki_service._page_vector_cache.clear()
+    kb = create_kb(client, "现代文学")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/闰土.md",
+        json={"path": "wiki/topics/闰土.md", "content": "# 少年闰土\n\n银项圈，钢叉，西瓜地里猹。\n"},
+    )
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/天气.md",
+        json={"path": "wiki/topics/天气.md", "content": "# 天气\n\n今天多云。\n"},
+    )
+    monkeypatch.setattr(
+        embedding_service,
+        "embed_texts",
+        fake_embeddings({"少年闰土": [1.0, 0.0, 0.0, 0.0], "小孩子": [1.0, 0.0, 0.0, 0.0]}),
+    )
+
+    lexical_only = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "小孩子", "strategy": "local"},
+    ).json()
+    hybrid = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "小孩子", "strategy": "hybrid"},
+    ).json()
+
+    assert lexical_only["results"] == [], "the words share nothing, so lexical search finds nothing"
+    assert hybrid["vectors"] is True
+    assert [item["path"] for item in hybrid["results"]] == ["wiki/topics/闰土.md"]
+
+
+def test_hybrid_degrades_to_lexical_when_embeddings_are_unavailable(client: TestClient, monkeypatch):
+    from app.services import embedding_service, wiki_service
+
+    wiki_service._page_vector_cache.clear()
+    kb = create_kb(client, "现代文学")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/闰土.md",
+        json={"path": "wiki/topics/闰土.md", "content": "# 少年闰土\n\n银项圈，钢叉，西瓜地里猹。\n"},
+    )
+
+    def unavailable(texts: list[str]) -> list[list[float]]:
+        raise embedding_service.EmbeddingError("model not installed")
+
+    monkeypatch.setattr(embedding_service, "embed_texts", unavailable)
+
+    data = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "闰土", "strategy": "hybrid"},
+    ).json()
+
+    assert data["strategy"] == "hybrid", "the requested strategy is still reported"
+    assert data["vectors"] is False, "but the response must not pretend vectors were used"
+    assert [item["path"] for item in data["results"]] == ["wiki/topics/闰土.md"]
+
+
+def test_auto_strategy_stays_purely_lexical(client: TestClient, monkeypatch):
+    """The default must not depend on an embedding model being present."""
+    from app.services import embedding_service, wiki_service
+
+    wiki_service._page_vector_cache.clear()
+    kb = create_kb(client, "现代文学")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/闰土.md",
+        json={"path": "wiki/topics/闰土.md", "content": "# 少年闰土\n\n银项圈，钢叉，西瓜地里猹。\n"},
+    )
+    called: list[str] = []
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        called.append(texts[0])
+        return fake_embeddings({"少年闰土": [1.0, 0.0, 0.0, 0.0]})(texts)
+
+    monkeypatch.setattr(embedding_service, "embed_texts", embed)
+
+    data = client.post(f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "闰土"}).json()
+
+    assert data["vectors"] is False
+    assert called == [], "the default path must not load the embedding model"
+
+
+# ---------------------------------------------------------------------------
+# Query planning: the model may rewrite the question, never the ranking
+# ---------------------------------------------------------------------------
+
+
+def test_planned_strategy_searches_with_model_supplied_terms(client: TestClient, monkeypatch):
+    """The page only contains 少年闰土; the question says 小孩子, and planning bridges them."""
+    from app.services import embedding_service, llm_service, wiki_service
+
+    wiki_service._page_vector_cache.clear()
+    kb = create_kb(client, "现代文学")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/闰土.md",
+        json={"path": "wiki/topics/闰土.md", "content": "# 少年闰土\n\n银项圈，钢叉，西瓜地里猹。\n"},
+    )
+    monkeypatch.setattr(embedding_service, "embed_texts", lambda texts: [[0.0, 0.0, 0.0, 0.0] for _ in texts])
+    monkeypatch.setattr(llm_service, "plan_query", lambda question, purpose="", override=None: ("闰土",))
+    llm_service.clear_runtime_config()
+
+    data = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "小孩子", "strategy": "planned"},
+    ).json()
+
+    assert data["planned"] is True
+    assert [item["path"] for item in data["results"]] == ["wiki/topics/闰土.md"]
+    assert data["answer_mode"] == "deterministic", "planning must not turn the answer into a model answer"
+
+
+def test_planned_strategy_falls_back_to_the_original_question(client: TestClient, monkeypatch):
+    from app.services import embedding_service, llm_service, wiki_service
+
+    wiki_service._page_vector_cache.clear()
+    monkeypatch.setattr(embedding_service, "embed_texts", lambda texts: [[0.0, 0.0, 0.0, 0.0] for _ in texts])
+    kb = create_kb(client, "现代文学")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/闰土.md",
+        json={"path": "wiki/topics/闰土.md", "content": "# 少年闰土\n\n银项圈，钢叉，西瓜地里猹。\n"},
+    )
+    monkeypatch.setattr(llm_service, "plan_query", lambda question, purpose="", override=None: ())
+    llm_service.clear_runtime_config()
+
+    data = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query",
+        json={"query": "闰土", "strategy": "planned"},
+    ).json()
+
+    assert data["planned"] is False
+    assert [item["path"] for item in data["results"]] == ["wiki/topics/闰土.md"]
+
+
+def test_plan_query_parses_only_a_keyword_line(monkeypatch):
+    from app.services import llm_service
+
+    llm_service.clear_runtime_config()
+    llm_service.update_runtime_config(LLMConfigurationInput(enabled=True, base_url="http://model.test/v1", api_key="k", model="m"))
+    monkeypatch.setattr(
+        llm_service,
+        "_chat_completion",
+        lambda config, messages: "KEYWORDS: 闰土，少年闰土、西瓜地\n（其余解释应当被忽略）",
+    )
+
+    assert llm_service.plan_query("小孩子") == ("闰土", "少年闰土", "西瓜地")
+
+    monkeypatch.setattr(llm_service, "_chat_completion", lambda config, messages: "直接回答问题，没有关键词行")
+    assert llm_service.plan_query("小孩子") == ()
+
+    llm_service.clear_runtime_config()
+
+
+def test_vector_floor_keeps_unrelated_pages_out(client: TestClient, monkeypatch):
+    """Below the floor a page is not a semantic hit, so "no answer" stays visible."""
+    from app.services import embedding_service, wiki_service
+
+    wiki_service._page_vector_cache.clear()
+    kb = create_kb(client, "投资笔记")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/无关.md",
+        json={"path": "wiki/topics/无关.md", "content": "# 无关\n\n今天多云。\n"},
+    )
+    # A similarity of 0.5 clears the default floor of 0.35; 0.1 does not.
+    monkeypatch.setattr(
+        embedding_service,
+        "embed_texts",
+        fake_embeddings({"无关": [0.5, 0.0, 0.0, 0.0], "查询": [1.0, 0.0, 0.0, 0.0]}),
+    )
+
+    above = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "查询", "strategy": "hybrid"}
+    ).json()
+    monkeypatch.setattr(
+        embedding_service,
+        "embed_texts",
+        fake_embeddings({"无关": [0.1, 0.0, 0.0, 0.0], "查询": [1.0, 0.0, 0.0, 0.0]}),
+    )
+    wiki_service._page_vector_cache.clear()
+    below = client.post(
+        f"/api/knowledge-bases/{kb['id']}/wiki/query", json={"query": "查询", "strategy": "hybrid"}
+    ).json()
+
+    assert above["vectors"] is True and above["results"]
+    assert below["vectors"] is False and below["results"] == []

@@ -274,6 +274,8 @@ class WikiQueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     top_k: int = Field(default=8, ge=1, le=30)
     save_as: str | None = Field(default=None, max_length=160)
+    # Named retrieval strategy; omitted means the default one.
+    strategy: str | None = Field(default=None, max_length=40)
     llm: "LLMConfigurationInput | None" = None
 
     @field_validator("query")
@@ -312,6 +314,13 @@ class WikiQueryResponse(BaseModel):
     results: list[WikiQueryResult]
     saved_path: str | None = None
     answer_mode: str = "deterministic"
+    # Which retrieval strategy ran, how many link hops it used, and whether page
+    # vectors contributed. Reported because feedback and replays need to know what
+    # actually happened, not what was requested.
+    strategy: str = "auto"
+    hops: int = 1
+    vectors: bool = False
+    planned: bool = False
     model: str | None = None
     model_error: str | None = None
 
@@ -411,6 +420,7 @@ class QueryFeedbackCreate(BaseModel):
     answer: str | None = Field(default=None, max_length=8_000)
     answer_mode: str | None = Field(default=None, max_length=20)
     model: str | None = Field(default=None, max_length=200)
+    strategy_id: str | None = Field(default=None, max_length=40)
     source_paths: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("query")
@@ -440,6 +450,7 @@ class QueryFeedbackRead(BaseModel):
     answer: str | None
     answer_mode: str | None
     model: str | None
+    strategy_id: str | None
     source_paths: list[str]
     created_at: datetime
 

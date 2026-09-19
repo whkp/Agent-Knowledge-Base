@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import shutil
 from collections import Counter
@@ -21,12 +22,16 @@ from app.db.schemas import (
     WikiQueryResult,
     WikiStatusResponse,
 )
-from app.services import llm_service
+from app.services import embedding_service, llm_service, retrieval_strategy
 
 
 WIKILINK_PATTERN = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)#]+\.md)(?:#[^)]+)?\)")
 TOKEN_PATTERN = re.compile(r"[\w\u3400-\u9fff]+", re.UNICODE)
+CJK_RUN_PATTERN = re.compile(r"[\u3400-\u9fff]+")
+LATIN_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
+BM25_K1 = 1.2
+BM25_B = 0.75
 SAFE_SLUG_PATTERN = re.compile(r"[^\w\u3400-\u9fff-]+", re.UNICODE)
 
 
@@ -491,22 +496,50 @@ def query_wiki(
     top_k: int,
     save_as: str | None = None,
     llm: LLMConfigurationInput | None = None,
+    strategy_id: str | None = None,
+    record_activity: bool = True,
 ) -> WikiQueryResponse:
+    """Answer a question from the wiki pages.
+
+    `record_activity=False` exists for replays and evaluations: they ask the same
+    questions many times over and must not write hundreds of lines into `log.md`.
+    """
+    try:
+        strategy = retrieval_strategy.get_strategy(strategy_id)
+    except retrieval_strategy.UnknownStrategyError as exc:
+        raise WikiWorkspaceError(str(exc)) from exc
     pages = [
         page
         for root, item in _iter_readable_page_paths(knowledge_base_id)
         if (page := _page_read(root, item)).path.startswith("wiki/")
     ]
     pages_by_path = {page.path: page for page in pages}
-    query_tokens = _tokens(query)
+    # An optional single planning call rewrites the question into search terms. It only
+    # ever adds terms; the ranking itself stays deterministic.
+    planned_terms: tuple[str, ...] = ()
+    if strategy.plan_query:
+        planned_terms = llm_service.plan_query(query, _purpose_text(knowledge_base_id), override=llm)
+    search_query = " ".join((query, *planned_terms)) if planned_terms else query
+
+    query_tokens = _search_tokens(search_query)
+    lexical = _lexical_scores(pages, query_tokens)
+    semantic: dict[str, float] = {}
+    if strategy.use_vectors:
+        vectors = _page_vectors(knowledge_base_id, pages)
+        if vectors is not None:
+            semantic = _vector_scores(pages, vectors, search_query)
+    vector_weight = get_settings().wiki_query_vector_weight if semantic else 0.0
+
     ranked: list[WikiQueryResult] = []
     for page in pages:
-        haystack = f"{page.title} {page.summary} {page.content}".casefold()
-        token_hits = sum(haystack.count(token.casefold()) for token in query_tokens)
-        title_hits = sum(token.casefold() in page.title.casefold() for token in query_tokens)
-        if token_hits == 0:
+        # Lexical relevance stays the backbone so scores remain comparable between
+        # strategies; the vector side only adds recall on top of it.
+        relevance = min(1.0, lexical.get(page.path, 0.0) + (semantic.get(page.path, 0.0) * vector_weight))
+        if relevance <= 0:
             continue
-        score = round(min(0.99, 0.12 + (token_hits * 0.08) + (title_hits * 0.18)), 4)
+        title = page.title.casefold()
+        title_coverage = len([token for token in query_tokens if token in title]) / len(query_tokens)
+        score = round(min(0.99, 0.15 + (relevance * 0.55) + (title_coverage * 0.30)), 4)
         ranked.append(
             WikiQueryResult(
                 path=page.path,
@@ -522,12 +555,21 @@ def query_wiki(
     direct = ranked[:top_k]
     # Following the wiki's own links is what a page store can do that raw chunk
     # retrieval cannot, so linked neighbours join the evidence as extra context.
+    settings = get_settings()
+    # A weak result means the direct matches were not enough, so an "auto" strategy is
+    # allowed to walk one link further instead of answering from the same evidence.
+    hops = retrieval_strategy.resolve_hops(
+        strategy,
+        direct[0].score if direct else None,
+        settings.wiki_query_deep_threshold,
+    )
     related = _related_neighbours(
         direct,
         pages_by_path,
         _link_edges(pages),
-        get_settings().wiki_query_neighbour_limit,
+        strategy.neighbour_limit,
         query_tokens,
+        hops=hops,
     )
     results = direct + related
     deterministic_answer = _answer(query, direct)
@@ -555,7 +597,7 @@ def query_wiki(
         save_page(knowledge_base_id, path, content)
         append_log(knowledge_base_id, f"query | {query}", f"Saved synthesis to [[{path.removesuffix('.md')}]].")
         saved_path = path.removeprefix("wiki/")
-    else:
+    elif record_activity:
         append_log(knowledge_base_id, f"query | {query}", f"Read {len(direct)} matching wiki pages and {len(related)} linked pages.")
     return WikiQueryResponse(
         query=query,
@@ -565,6 +607,10 @@ def query_wiki(
         answer_mode="llm" if synthesis.answer else "deterministic",
         model=synthesis.model,
         model_error=synthesis.error,
+        strategy=strategy.id,
+        hops=hops,
+        vectors=bool(semantic),
+        planned=bool(planned_terms),
     )
 
 
@@ -574,23 +620,54 @@ def _related_neighbours(
     edges: list[tuple[str, str]],
     limit: int,
     query_tokens: tuple[str, ...],
+    hops: int = 1,
 ) -> list[WikiQueryResult]:
-    """Pages one hop from the direct matches, ranked by how many matches reach them."""
-    if limit <= 0 or not seeds:
+    """Pages reachable by following links out of the direct matches.
+
+    `hops` is the caller's decision: a confident query only needs its immediate
+    neighbours, a weak one may walk one link further. Every hop halves the confidence
+    a page inherits, so a page two links away never outranks one link away. Candidates
+    are ordered by how many direct matches reach them, which keeps a small set of
+    matches from deciding the whole neighbourhood on their own.
+    """
+    if limit <= 0 or not seeds or hops < 1:
         return []
-    seed_scores = {seed.path: seed.score for seed in seeds}
-    reached_by: dict[str, set[str]] = {}
+
+    adjacency: dict[str, set[str]] = {}
     for source, target in edges:
-        for seed_path, candidate in ((source, target), (target, source)):
-            if seed_path in seed_scores and candidate not in seed_scores:
-                reached_by.setdefault(candidate, set()).add(seed_path)
-    ordered = sorted(reached_by, key=lambda path: (-len(reached_by[path]), path))
+        adjacency.setdefault(source, set()).add(target)
+        adjacency.setdefault(target, set()).add(source)
+
+    seed_paths = {seed.path for seed in seeds}
+    inherited: dict[str, float] = {seed.path: seed.score for seed in seeds}
+    reaches: dict[str, set[str]] = {}
+    seen = set(seed_paths)
+    frontier: dict[str, set[str]] = {path: {path} for path in seed_paths}
+
+    for _ in range(hops):
+        next_frontier: dict[str, set[str]] = {}
+        for path, origins in frontier.items():
+            base = inherited.get(path, 0.0)
+            for neighbour in adjacency.get(path, ()):
+                if neighbour in seen:
+                    continue
+                next_frontier.setdefault(neighbour, set()).update(origins)
+                inherited[neighbour] = max(inherited.get(neighbour, 0.0), base * 0.5)
+        if not next_frontier:
+            break
+        for neighbour, origins in next_frontier.items():
+            reaches.setdefault(neighbour, set()).update(origins)
+        seen |= set(next_frontier)
+        frontier = next_frontier
+
+    ordered = sorted(reaches, key=lambda path: (-len(reaches[path]), -inherited.get(path, 0.0), path))
     neighbours: list[WikiQueryResult] = []
-    for path in ordered[:limit]:
+    for path in ordered:
+        if len(neighbours) >= limit:
+            break
         page = pages_by_path.get(path)
         if page is None:
             continue
-        parent_score = max(seed_scores[seed] for seed in reached_by[path])
         neighbours.append(
             WikiQueryResult(
                 path=path,
@@ -598,7 +675,7 @@ def _related_neighbours(
                 page_type=page.page_type,
                 summary=page.summary,
                 snippet=_snippet(page.content, query_tokens),
-                score=round(parent_score * 0.5, 4),
+                score=round(inherited.get(path, 0.0), 4),
                 citations=[path],
                 related=True,
             )
@@ -942,6 +1019,113 @@ def _recent_log(root: Path) -> list[str]:
 
 def _tokens(value: str) -> list[str]:
     return [item for item in TOKEN_PATTERN.findall(value.casefold()) if len(item) > 1]
+
+
+def _lexical_scores(pages: list[WikiPageRead], query_tokens: tuple[str, ...]) -> dict[str, float]:
+    """BM25 over bigram terms, mapped to 0..1 so scores stay comparable across queries.
+
+    Ordinary term counts would let the longest page win, because bigram terms make the
+    count grow with the length of the query. BM25 saturates term frequency and
+    normalises by page length instead, which is what separates four pages that all
+    mention the same phrase.
+    """
+    if not query_tokens or not pages:
+        return {}
+
+    haystacks = {page.path: f"{page.title} {page.summary} {page.content}".casefold() for page in pages}
+    lengths = {path: max(1, len(text)) for path, text in haystacks.items()}
+    average_length = sum(lengths.values()) / len(lengths)
+
+    raw: dict[str, float] = {}
+    ceiling = 0.0
+    for token in query_tokens:
+        document_frequency = sum(1 for text in haystacks.values() if token in text)
+        if document_frequency == 0:
+            continue
+        idf = math.log(1 + (len(pages) - document_frequency + 0.5) / (document_frequency + 0.5))
+        ceiling += idf * (BM25_K1 + 1)
+        for path, text in haystacks.items():
+            frequency = text.count(token)
+            if frequency == 0:
+                continue
+            saturation = (frequency * (BM25_K1 + 1)) / (
+                frequency + BM25_K1 * (1 - BM25_B + BM25_B * lengths[path] / average_length)
+            )
+            raw[path] = raw.get(path, 0.0) + idf * saturation
+
+    if ceiling <= 0:
+        return {}
+    return {path: min(1.0, value / ceiling) for path, value in raw.items()}
+
+
+# Page embeddings rarely change and are cheap to score against, so they are cached per
+# workspace and rebuilt only when a page's file timestamp moves.
+_page_vector_cache: dict[int, tuple[tuple, dict[str, list[float]]]] = {}
+
+
+def _page_vectors(knowledge_base_id: int, pages: list[WikiPageRead]) -> dict[str, list[float]] | None:
+    """Embed page titles, summaries and openings, or None when that is not possible.
+
+    Returning None rather than raising keeps a semantic strategy usable on a machine
+    without the embedding model: it quietly degrades to the lexical ranking.
+    """
+    fingerprint = tuple(sorted((page.path, page.updated_at.isoformat()) for page in pages))
+    cached = _page_vector_cache.get(knowledge_base_id)
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+
+    payload = [f"{page.title}\n{page.summary}\n{page.content[:1_500]}" for page in pages]
+    try:
+        vectors = embedding_service.embed_texts(payload)
+    except embedding_service.EmbeddingError:
+        return None
+    if len(vectors) != len(pages):
+        return None
+
+    mapping = {page.path: vector for page, vector in zip(pages, vectors)}
+    _page_vector_cache[knowledge_base_id] = (fingerprint, mapping)
+    return mapping
+
+
+def _vector_scores(pages: list[WikiPageRead], vectors: dict[str, list[float]], query: str) -> dict[str, float]:
+    """Cosine similarity per page, above the floor. Embeddings are normalised, so a dot product.
+
+    The floor matters: without it every query returns the least-unrelated pages, which looks
+    like recall but is noise, and it hides the honest answer "this workspace cannot answer
+    that question".
+    """
+    try:
+        query_vector = embedding_service.embed_texts([query])[0]
+    except embedding_service.EmbeddingError:
+        return {}
+
+    floor = get_settings().wiki_query_vector_floor
+    scores: dict[str, float] = {}
+    for page in pages:
+        page_vector = vectors.get(page.path)
+        if page_vector is None or len(page_vector) != len(query_vector):
+            continue
+        similarity = sum(left * right for left, right in zip(page_vector, query_vector))
+        if similarity >= floor:
+            scores[page.path] = similarity
+    return scores
+
+
+def _search_tokens(value: str) -> tuple[str, ...]:
+    """Query terms used to score pages.
+
+    Latin words stay whole; a run of CJK characters is split into overlapping
+    bigrams, which is what lets 如何配置资产 match a page about 资产配置 without
+    shipping a segmenter. It fixes word order and inserted particles, not
+    synonyms: 小孩子 still will not find 闰土, that needs vectors.
+    """
+    tokens: list[str] = [word.casefold() for word in LATIN_TOKEN_PATTERN.findall(value) if len(word) > 1]
+    for run in CJK_RUN_PATTERN.findall(value):
+        if len(run) == 1:
+            tokens.append(run)
+        else:
+            tokens.extend(run[index : index + 2] for index in range(len(run) - 1))
+    return tuple(dict.fromkeys(tokens))
 
 
 def _slug(value: str) -> str:

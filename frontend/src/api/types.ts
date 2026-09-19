@@ -127,6 +127,9 @@ export interface WikiQueryResponse {
   results: WikiQueryResult[];
   saved_path: string | null;
   answer_mode: "deterministic" | "llm";
+  /** Which named retrieval strategy ran, and how many link hops it used. */
+  strategy?: string;
+  hops?: number;
   model: string | null;
   model_error: string | null;
 }

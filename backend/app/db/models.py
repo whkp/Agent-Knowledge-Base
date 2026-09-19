@@ -113,5 +113,6 @@ class QueryFeedback(Base):
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     answer_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    strategy_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     source_paths: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

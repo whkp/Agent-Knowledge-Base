@@ -132,6 +132,39 @@ async def read_wiki_page(knowledge_base_id: int, path: str) -> dict[str, Any]:
     return response
 
 
+async def search_with_strategy(knowledge_base_id: int, query: str, strategy: str, top_k: int = 8) -> dict[str, Any]:
+    """Retrieve wiki pages through a named retrieval strategy.
+
+    Strategies differ in how far they follow the wiki's own links and how many linked
+    pages they add, so the calling Agent can pick one per question instead of living with
+    a single fixed configuration. Available ids come from ``list_retrieval_strategies``;
+    the response echoes the strategy that ran and the hop count it used, and the same id
+    should be reported back through answer feedback so the choice can be evaluated later.
+    """
+    query = query.strip()
+    if knowledge_base_id <= 0:
+        return _error("knowledge_base_id must be greater than 0.")
+    if not query:
+        return _error("query cannot be empty.")
+    if not strategy.strip():
+        return _error("strategy cannot be empty.")
+    if top_k <= 0:
+        return _error("top_k must be greater than 0.")
+    payload: dict[str, Any] = {"query": query, "top_k": top_k, "strategy": strategy.strip(), "llm": MCP_LOCAL_RETRIEVAL}
+    response = await _request("POST", f"/api/knowledge-bases/{knowledge_base_id}/wiki/query", json=payload)
+    if "error" in response:
+        return _error(response["error"], query=query)
+    return response
+
+
+async def list_retrieval_strategies() -> dict[str, Any]:
+    """List the named retrieval strategies this Backend offers, with their trade-offs."""
+    response = await _request("GET", "/api/retrieval-strategies")
+    if "error" in response:
+        return _error(response["error"])
+    return response
+
+
 async def query_wiki(knowledge_base_id: int, query: str, top_k: int = 8, save_as: str | None = None) -> dict[str, Any]:
     """Retrieve ranked Markdown wiki pages without invoking AgentKB's LLM.
 

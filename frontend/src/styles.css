@@ -2678,3 +2678,33 @@ textarea:disabled,
   justify-content: flex-end;
   margin-top: 8px;
 }
+
+/* Retrieval strategy picker in the query dock */
+.strategy-picker {
+  align-items: center;
+  color: var(--ink-4);
+  display: inline-flex;
+  font-family: var(--face-mono);
+  font-size: 9.5px;
+  gap: 6px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.strategy-picker select {
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-xs);
+  color: var(--ink-2);
+  font-family: var(--face-ui);
+  font-size: 11px;
+  letter-spacing: 0;
+  outline: none;
+  padding: 3px 5px;
+  text-transform: none;
+}
+
+.strategy-picker select:focus-visible {
+  border-color: var(--verdigris);
+  box-shadow: 0 0 0 2px var(--verdigris-wash);
+}

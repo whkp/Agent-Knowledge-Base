@@ -30,7 +30,8 @@ import { createKnowledgeBase, listKnowledgeBases } from "./api/knowledge";
 import { getLLMConfig, testLLMConfig, updateLLMConfig } from "./api/llm";
 import { submitQueryFeedback } from "./api/feedback";
 import { searchKnowledgeBase } from "./api/search";
-import { getWikiGraph, getWikiStatus, lintWiki, listAllWikiPages, queryWiki, readWikiPage, saveWikiPage } from "./api/wiki";
+import { getWikiGraph, getWikiStatus, lintWiki, listAllWikiPages, listRetrievalStrategies, queryWiki, readWikiPage, saveWikiPage } from "./api/wiki";
+import type { RetrievalStrategy } from "./api/wiki";
 import type { KnowledgeBase, LLMConfigurationInput, LLMConfigStatus, SearchResponse, WikiGraph, WikiLint, WikiPage, WikiQueryResponse, WikiStatus } from "./api/types";
 
 type Notice = { type: "success" | "error"; message: string } | null;
@@ -105,6 +106,8 @@ export default function App() {
   const [pageFilter, setPageFilter] = useState<PageFilter>("all");
   const [query, setQuery] = useState("");
   const [queryMode, setQueryMode] = useState<QueryMode>("wiki");
+  const [strategies, setStrategies] = useState<RetrievalStrategy[]>([]);
+  const [strategy, setStrategy] = useState("auto");
   const [queryResult, setQueryResult] = useState<WikiQueryResponse | null>(null);
   const [ragResult, setRagResult] = useState<SearchResponse | null>(null);
   const [lintResult, setLintResult] = useState<WikiLint | null>(null);
@@ -161,6 +164,12 @@ export default function App() {
         message: error instanceof Error ? error.message : "知识库加载失败",
       }));
   }, [notify]);
+
+  useEffect(() => {
+    void listRetrievalStrategies()
+      .then((page) => setStrategies(page.items))
+      .catch(() => setStrategies([]));
+  }, []);
 
   useEffect(() => {
     void getLLMConfig()
@@ -255,6 +264,7 @@ export default function App() {
         const result = await queryWiki(selected.id, {
           query,
           top_k: 8,
+          strategy,
           ...(save ? { save_as: query } : {}),
         });
         setQueryResult(result);
@@ -553,6 +563,9 @@ export default function App() {
               onSave={() => void handleQuery(true)}
               llmReady={llmReady}
               model={llmForm.model}
+              strategies={strategies}
+              strategy={strategy}
+              onStrategyChange={setStrategy}
             >
               {queryResult ? <QueryResult knowledgeBaseId={selected?.id ?? null} result={queryResult} onOpenPage={(path) => void openPage(path)} /> : null}
               {ragResult ? <RagResult knowledgeBaseId={selected?.id ?? null} result={ragResult} /> : null}
@@ -568,7 +581,7 @@ export default function App() {
   );
 }
 
-function QueryDock({ children, disabled, llmReady, mode, model, onModeChange, onSave, onSubmit, query, setQuery }: {
+function QueryDock({ children, disabled, llmReady, mode, model, onModeChange, onSave, onStrategyChange, onSubmit, query, setQuery, strategies, strategy }: {
   children: React.ReactNode;
   disabled: boolean;
   llmReady: boolean;
@@ -576,9 +589,12 @@ function QueryDock({ children, disabled, llmReady, mode, model, onModeChange, on
   model: string;
   onModeChange: (mode: QueryMode) => void;
   onSave: () => void;
+  onStrategyChange: (value: string) => void;
   onSubmit: () => void;
   query: string;
   setQuery: (value: string) => void;
+  strategies: RetrievalStrategy[];
+  strategy: string;
 }) {
   const wikiMode = mode === "wiki";
   return (
@@ -591,6 +607,20 @@ function QueryDock({ children, disabled, llmReady, mode, model, onModeChange, on
             <button type="button" className={!wikiMode ? "active" : ""} onClick={() => onModeChange("rag")} disabled={disabled}><Search size={14} /> 原始资料 RAG</button>
           </div>
           <div className="query-actions">
+            {strategies.length ? (
+              <label className="strategy-picker" title={strategies.find((item) => item.id === strategy)?.description ?? ""}>
+                <span>检索策略</span>
+                <select
+                  value={strategy}
+                  disabled={disabled}
+                  onChange={(event) => onStrategyChange(event.target.value)}
+                >
+                  {strategies.map((item) => (
+                    <option key={item.id} value={item.id}>{item.label}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             {llmReady ? <span className="query-model-chip" title={model ? `使用 ${model} 综合回答` : "使用已配置模型综合回答"}><Sparkles size={13} /> 模型综合</span> : <span className="query-local-chip">本地检索</span>}
             {wikiMode ? <button className="icon-button subtle" title="将本次回答保存为页面" onClick={onSave} disabled={disabled || !query.trim()}><FilePlus2 size={16} /></button> : null}
           </div>
@@ -828,7 +858,7 @@ function QueryResult({ knowledgeBaseId, result, onOpenPage }: { knowledgeBaseId:
   }
 
   return <div className="result-block">
-    <div className="result-heading"><Sparkles size={15} /><span>{result.answer_mode === "llm" ? "模型综合回答" : "页面回答"}</span><small>{result.answer_mode === "llm" && result.model ? result.model : `${result.results.length} 个引用${relatedCount ? ` · ${relatedCount} 个沿链接关联` : ""}`}</small></div>
+    <div className="result-heading"><Sparkles size={15} /><span>{result.answer_mode === "llm" ? "模型综合回答" : "页面回答"}</span><small>{result.answer_mode === "llm" && result.model ? result.model : `${result.results.length} 个引用${relatedCount ? ` · ${relatedCount} 个沿链接关联` : ""}`}{result.strategy ? ` · 策略 ${result.strategy}` : ""}{result.hops && result.hops > 1 ? ` · ${result.hops} 跳` : ""}</small></div>
     <RichText className="answer-copy" content={result.answer} onOpenPage={onOpenPage} onCite={focusReference} />
     {result.model_error ? <p className="result-fallback"><AlertCircle size={13} /> {result.model_error}</p> : null}
     {result.results.length ? <div className="citation-list" ref={listRef}>{result.results.map((item, index) => <button className={`${activeRef === index + 1 ? "active" : ""} ${item.related ? "related" : ""}`} data-ref-anchor={index + 1} data-ref={index + 1} key={item.path} onClick={() => onOpenPage(item.path)}><span>{item.title}</span>{item.related ? <em className="cite-related">关联</em> : null}<small>{item.path}</small></button>)}</div> : null}
@@ -839,6 +869,7 @@ function QueryResult({ knowledgeBaseId, result, onOpenPage }: { knowledgeBaseId:
       answer={result.answer}
       answerMode={result.answer_mode}
       model={result.model}
+      strategyId={result.strategy ?? null}
       sourcePaths={result.results.map((item) => item.path)}
     />
   </div>;
@@ -865,6 +896,7 @@ function RagResult({ knowledgeBaseId, result }: { knowledgeBaseId: number | null
       answer={result.answer ?? ""}
       answerMode={result.answer_mode}
       model={result.model}
+      strategyId={null}
       sourcePaths={result.results.map((item) => `document:${item.document_id}#${item.chunk_index ?? "-"}`)}
     />
   </div>;
@@ -874,7 +906,7 @@ function RagResult({ knowledgeBaseId, result }: { knowledgeBaseId: number | null
  * One rating per answer. A thumbs down asks why before it is recorded, because a
  * bare negative tells a later evaluation nothing it can act on.
  */
-function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, query, sourcePaths }: {
+function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, query, sourcePaths, strategyId }: {
   answer: string;
   answerMode: string | null;
   knowledgeBaseId: number | null;
@@ -882,6 +914,7 @@ function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, que
   model: string | null;
   query: string;
   sourcePaths: string[];
+  strategyId: string | null;
 }) {
   const [rating, setRating] = useState<1 | -1 | 0>(0);
   const [note, setNote] = useState("");
@@ -917,6 +950,7 @@ function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, que
         answer: answer.slice(0, 8_000) || null,
         answer_mode: answerMode,
         model,
+        strategy_id: strategyId,
         source_paths: sourcePaths.slice(0, 50),
       });
       setState("saved");

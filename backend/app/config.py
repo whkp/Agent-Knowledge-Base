@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_context_max_chars: int = 12_000
     wiki_query_neighbour_limit: int = 3
+    # Below this score the direct matches are considered weak, so the query may
+    # follow one more link hop. Set it to 1 to always walk two hops.
+    wiki_query_deep_threshold: float = 0.5
+    # Which strategy a query uses when it does not name one. Change this only with
+    # replay evidence: `replay_queries.py` compares strategies on recorded feedback.
+    wiki_query_default_strategy: str = "auto"
+    # How much a page's vector similarity may add on top of its lexical score.
+    wiki_query_vector_weight: float = 0.35
+    # Minimum cosine similarity for a page to count as a semantic hit. Measured on the
+    # multilingual MiniLM model: real matches score above 0.5, unrelated pages sit in the
+    # 0.1-0.2 band, so without a floor every query would drag the least-unrelated pages in.
+    wiki_query_vector_floor: float = 0.35
     cors_origins: str = Field(default="http://localhost:5173")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

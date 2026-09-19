@@ -279,6 +279,48 @@ def _synthesis_body(text: str) -> str:
     return body.strip()
 
 
+QUERY_PLAN_PROMPT = (
+    "You rewrite a question into search terms for a keyword and vector search over a "
+    "Markdown wiki. Reply with one line only, in the form `KEYWORDS: term, term, term`. "
+    "Use the words a wiki page about the answer would actually contain, including "
+    "synonyms of the user's wording. Do not answer the question."
+)
+
+
+def plan_query(
+    question: str,
+    purpose: str = "",
+    override: LLMConfigurationInput | None = None,
+) -> tuple[str, ...]:
+    """Terms to search with, or an empty tuple when planning is unavailable.
+
+    Planning is a single call that only produces search terms. The retrieval itself stays
+    deterministic, so a bad plan can only make the search worse in a measurable way, never
+    change how results are computed.
+    """
+    config = resolve_runtime_config(override)
+    if not config.enabled or not config.ready:
+        return ()
+
+    system = QUERY_PLAN_PROMPT
+    intent = _purpose_block(purpose)
+    if intent:
+        system = f"{system}\n\n{intent}"
+    try:
+        reply = _chat_completion(
+            config,
+            [{"role": "system", "content": system}, {"role": "user", "content": question}],
+        )
+    except LLMRequestError:
+        return ()
+
+    match = re.search(r"^\s*KEYWORDS\s*[:：]\s*(.+)$", reply, flags=re.MULTILINE)
+    if not match:
+        return ()
+    terms = [term.strip() for term in re.split(r"[，,、]", match.group(1)) if term.strip()]
+    return tuple(term[:40] for term in terms[:8])
+
+
 def test_connection(override: LLMConfigurationInput | None = None) -> str:
     config = resolve_runtime_config(override)
     if not config.ready:

@@ -22,6 +22,7 @@ def create_feedback(db: Session, knowledge_base_id: int, payload: QueryFeedbackC
         answer=payload.answer,
         answer_mode=payload.answer_mode,
         model=payload.model,
+        strategy_id=payload.strategy_id,
         source_paths=payload.source_paths,
     )
     db.add(feedback)

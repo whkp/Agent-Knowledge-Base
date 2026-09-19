@@ -11,10 +11,12 @@ from tools import (
     get_wiki_status,
     lint_wiki,
     list_knowledge_bases,
+    list_retrieval_strategies,
     list_wiki_pages,
     query_wiki,
     read_wiki_page,
     search_knowledge_base,
+    search_with_strategy,
     synthesize_knowledge,
 )
 
@@ -30,6 +32,8 @@ mcp.tool()(get_wiki_status)
 mcp.tool()(list_wiki_pages)
 mcp.tool()(read_wiki_page)
 mcp.tool()(query_wiki)
+mcp.tool()(search_with_strategy)
+mcp.tool()(list_retrieval_strategies)
 mcp.tool()(synthesize_knowledge)
 mcp.tool()(lint_wiki)
 
