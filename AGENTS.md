@@ -1,8 +1,66 @@
 # AGENTS.md
 
-本文件是 `AgentKB` 的开发导航，供 Codex/Agent 在后续任务中优先读取。项目目标是构建面向 AI Agent 的 Markdown-first 知识库系统：Backend 负责知识库、来源摄取、wiki 文件维护、分块、向量化与检索；Frontend 提供 AgentKB 工作台；MCP Server 将同一套知识库工作流暴露为 Agent 工具。
+本文件是 `AgentKB` 的开发导航。新接手的 Agent / 工程师读完这一份就能开工：**项目概要 → 一分钟上手 → 硬性契约 → 已完成能力 → 已经踩过的坑 → 历史阶段**。
 
-## Wiki-first 约束
+本文件里的数字是 2026-09-19 的记录，过时会很正常；命令与契约是稳定的。
+
+> 根目录 `TODO.md` 是**本地工作清单**（`.gitignore` 已排除，克隆下来没有属正常）：写"接下来做什么、为什么、怎么验证"。
+> 本文件写"现在是什么、不能破坏什么、哪里容易踩坑"。公开文档不要链接 `TODO.md`。
+
+---
+
+## 1. 项目概要
+
+把 Markdown wiki 当长期事实载体、SQLite 当业务索引、Chroma 当可重建的检索加速层，面向**人和 AI Agent 同时**提供可摄取、可追溯的本地知识库。
+
+| 模块 | 职责 | 入口 |
+| --- | --- | --- |
+| `backend/` | **唯一业务核心**：知识库 CRUD、来源摄取与 wiki 维护、分块、embedding、检索、可选模型综合、反馈与回放工具 | `backend/app/main.py` |
+| `frontend/` | 工作台（"阅览室"）：四张纸＝页面阅读/编辑、派生链接图谱、wiki 检查、回答反馈 | `frontend/src/App.tsx` |
+| `mcp-server/` | 把 Backend 的 HTTP 工作流暴露为 MCP 工具，供 Codex / Claude Code 等调用方 Agent 使用 | `mcp-server/tools.py` |
+| `docs/` | 架构、检索、自演化、安装文档，**每份都有中英两版** | `docs/ARCHITECTURE.md` / `docs/ARCHITECTURE_EN.md` |
+| `proposals/` | 由回放证据生成的策略提案（Markdown；晋升＝一次 git 改动） | — |
+
+数据落盘（都已被 git 忽略）：
+
+```text
+backend/data/agentkb.db       SQLite：知识库、文档、chunk、反馈
+backend/data/wiki/kb-<id>/    Markdown 工作区（WIKI_ROOT_DIR）
+backend/chroma/               可选的 chunk 向量库
+```
+
+项目后续演进有两条主线：
+
+- **RAG 应用**：Backend 可通过 OpenAI-compatible 接口，把检索 chunks 或 wiki 页面综合成带引用依据的回答；后续补齐模型生成流式输出与更多 Provider 原生适配。
+- **MCP 外接知识库**：`query_wiki` 和 `search_knowledge_base` 必须强制 `llm.enabled=false`，最终推理由调用方 Agent 完成；仅 `synthesize_knowledge` 可显式请求 Backend 模型综合。
+
+---
+
+## 2. 一分钟上手
+
+```bash
+# 测试
+cd backend    && python3.13 -m pytest tests -q      # 118 条
+cd mcp-server && python3.13 -m pytest tests -q      # 19 条
+cd frontend   && npx tsc -b && npm run build        # 类型检查 + 打包
+cd frontend   && npm run bench:layout               # 图谱布局耗时与质量指标
+
+# 起服务
+cd backend  && python3.13 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+cd frontend && npx vite --port 5173
+```
+
+- **必须 `python3.13`**：本机 `python3.14` 没有 pytest。
+- **改了 Backend 代码要重启**：启动命令没有 `--reload`，否则你测到的还是旧进程（尤其实机验证时容易被骗）。
+- **从 `backend/` 启动**：`WIKI_ROOT_DIR` 与数据库路径都相对进程 CWD。仓库根目录下那份 `data/` 是历史遗留（在根目录跑过一次留下的另一套库与工作区），不是你正在用的那份。
+- 端口：Backend `127.0.0.1:8000`、工作台 `localhost:5173`。
+- CORS 默认只允许 `http://localhost:5173`。换端口或用生产构建预览（`vite preview`）时必须同步改 `CORS_ORIGINS`，否则前端拿不到数据、界面看起来像坏了。
+- 环境变量在 `backend/.env`（从 `.env.example` 复制）；默认不开启模型。
+- 网络：本机 `github.com:443` 的 HTTPS git 不通（HTTP2 framing error），远程用 SSH `git@github.com:whkp/Agent-Knowledge-Base.git`；`httpx` 会拾取系统代理，**新建出站客户端必须 `trust_env=False`**（`mcp-server/tools.py`、`llm_service` 都这么做）。macOS 没有 `timeout` 命令。
+
+---
+
+## 3. 硬性契约：Wiki-first 约束
 
 - 每个知识库都有独立工作区：`data/wiki/kb-<id>/`。
 - `raw/` 是不可变来源快照；`wiki/` 是可维护页面；`index.md` 是内容索引；`log.md` 是 append-only 活动记录。
@@ -18,22 +76,17 @@
 - 回答反馈是检索策略唯一的评估信号来源：它写入 SQLite 的 `query_feedback`，只做记录，不得写入 wiki 页面或 Markdown 工作区，也不得改变当次回答。点「没用」时用 `bad_paths` 指认具体哪条引用不对；该字段只在 `rating=-1` 时有效（👍 携带它应被拒绝，而不是被静默丢弃），且它仍不是标注答案，回放与提案的措辞不得把「隐藏了被指认的引用」说成「答案对了」。
 - 检索策略的集合是代码、选择是数据：新增策略必须改代码并配测试；查询通过 `strategy` 字段选择，响应必须如实回报 `strategy/hops/vectors/planned`，反馈必须记录 `strategy_id`，这样"哪个配置产生了哪个答案"才可追溯。
 - 检索打分必须与查询长度无关（使用 BM25 与覆盖率，而不是裸词频），语义检索必须有相似度下限；embedding 或模型不可用时必须确定性退回，并如实报告实际用了什么。
+- 同一来源的重复摄取必须被识别：相同内容 + 相同来源身份（URL / 文件名 / 标题）返回 `409` 并指向更新接口；内容相同但来源不同的两次摄取是**两份来源**，不得合并。
+- 原地更新必须保留 document id、`raw/` 快照路径、来源页路径与主题页来源行；不得出现孤儿页面或重复的 `## Sources` 行。
 - lint 至少检查断链、孤立页和缺少摘要；不要修改 `.obsidian/` 或其他第三方元数据。
 
-如果本文件的阶段计划不足以判断产品边界、接口细节、演示路径或验收口径，优先参考根目录 `README.md`、`docs/ARCHITECTURE.md` 和 `docs/LOCAL_INSTALLATION.md`。阶段 0 至 7 是历史 MVP 交付记录；当前实现契约以架构文档和测试为准。接下来要做的事、优先级与验收标准记在根目录 `TODO.md`（**本地工作清单，`.gitignore` 已排除，不随仓库发布**；克隆下来没有这个文件是正常的），动检索相关的改动前先读它和 `docs/SELF_EVOLUTION_CN.md`。
-
-项目后续演进有两条主线：
-- RAG 应用：Backend 已支持通过 OpenAI-compatible 接口，将检索 chunks 或 wiki 页面综合成带引用依据的回答；后续将补齐模型生成流式输出和更多 Provider 原生适配。
-- MCP 外接知识库：MCP Server 将 Backend 检索能力暴露为 Agent 工具。`query_wiki` 和 `search_knowledge_base` 必须强制 `llm.enabled=false`，由 Codex/Claude Code/OpenClaw 等调用方 Agent 完成最终推理；仅 `synthesize_knowledge` 可显式请求 Backend 模型综合。
-
-## 全局原则
+## 4. 全局原则
 
 - Backend 是唯一业务核心，Frontend 和 MCP Server 不重复实现 wiki、检索或文件维护逻辑。
 - SQLite 保存业务数据，ChromaDB 保存 chunk embedding。
 - 删除知识库或文档时，必须同步删除对应 Chroma 向量。
 - 外部来源删除时，必须同步删除 SQLite 记录、raw Markdown 快照、Wiki 来源关系和 Chroma 向量。
 - 同一个 Backend 检索核心要同时服务普通用户路径和 Agent 工具路径。
-- 优先交付可演示 MVP，再补测试和部署优化项。
 - 中文语义检索默认使用 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`。
 - API 错误必须清晰：空 query、知识库不存在、空文档、非 txt、文件过大、embedding/向量库/检索失败。
 - `POST /api/knowledge-bases/{id}/documents/source-snapshot` 必须复用普通摄取流程，并将来源元数据透传到 Chroma 和 RAG `SearchResult`。
@@ -42,185 +95,96 @@
 - MCP 基础检索工具必须传入单次请求覆盖 `{"enabled": false}`，不得继承网页或 `.env` 的模型启用状态；MCP 模型综合必须是名称和参数都明确的独立工具，且不接收 API Key。MCP 的摄取工具必须传 `synthesize_topic=false`，不得隐式触发主题页改写。
 - `POST /api/search/stream` 仍是仅检索的兼容 SSE 契约。不要把模型 token 直接塞入旧事件格式；新增流式模型回答前必须先设计并记录新的事件契约。
 
-## 阶段 0：仓库与环境
+---
 
-目标：让项目结构稳定，后续任务能直接进入开发。
+## 5. 已经做完的能力（不要重做，先看这里）
 
-交付：
-- `backend/`、`frontend/`、`mcp-server/` 基础目录。
-- `.gitignore`、`README.md`。
-- Backend 和 MCP 的 `.env.example`。
-- Frontend 的 Vite/React/TypeScript 配置文件。
+| 能力 | 代码 | 测试 |
+| --- | --- | --- |
+| 知识库 CRUD 与分页 | `app/api/knowledge_routes.py`、`app/services/knowledge_service.py` | `tests/test_knowledge.py` |
+| 文本 / `.txt` / 来源快照摄取，分块（500/80），`link_only` 不入库 | `app/services/document_service.py`、`chunk_service.py` | `tests/test_upload.py` |
+| 来源重复摄取 `409` 去重；`PUT .../documents/{id}` 原地更新（保留 id 与三个路径） | `app/services/document_service.py`、`wiki_service.update_source` | `tests/test_document_update.py` |
+| 工作区维护：来源页、主题页、`index.md`、`log.md`、确定性主题归属、事务外模型维护 | `app/services/wiki_service.py` | `tests/test_wiki.py` |
+| 检索：CJK 二元组 + BM25 + 覆盖率打分、自适应链接扩展（`related=true`）、页面向量召回（带下限）、五条命名策略、响应回报 `strategy/hops/vectors/planned` | `app/services/retrieval_service.py`、`retrieval_strategy.py` | `tests/test_search.py`、`test_wiki.py` |
+| 可选模型综合（页面 / 原始资料 / 显式 MCP 路径）、配置优先级、失败回落 | `app/services/llm_service.py` | `tests/test_llm.py` |
+| 反馈闭环：👍/👎 + 原因 + `bad_paths` → 回放 → 提案 | `app/api/feedback_routes.py`、`scripts/replay_queries.py`、`scripts/propose_strategy_change.py` | `tests/test_feedback.py`、`test_wiki.py` |
+| 工作台四张纸、引用脚注、Barnes-Hut 图谱布局、反馈纸 | `frontend/src/App.tsx`、`src/graph/layout.ts`、`src/styles.css` | 无自动化测试（见 §6.4） |
+| MCP 工具：检索、策略、摄取、原地更新、页面、状态、lint、反馈、显式综合 | `mcp-server/tools.py`、`server.py` | `mcp-server/tests/test_mcp_tools.py` |
+| `docs/` 中英成对文档 + `skills/agentkb-retrieval` | `docs/`、`skills/` | 人工核对（数字/标识符需一致） |
 
-验收：
-- `git status` 能清楚展示初始化文件。
-- README 包含本地启动方式和模块说明。
+---
 
-## 阶段 1：Backend 基础 API
+## 6. 已经踩过的坑
 
-目标：完成 FastAPI 服务、SQLite 模型和知识库 CRUD。
+这一节是本文档最有价值的部分：每条都是实际发生过的，括号里是症状。
 
-建议文件：
-- `backend/app/main.py`
-- `backend/app/config.py`
-- `backend/app/db/database.py`
-- `backend/app/db/models.py`
-- `backend/app/db/schemas.py`
-- `backend/app/api/knowledge_routes.py`
-- `backend/app/services/knowledge_service.py`
+### 6.1 编辑代码时
 
-任务：
-1. 初始化 FastAPI app，挂载 `/api` 路由。
-2. 建立 SQLAlchemy engine/session/base。
-3. 定义 `knowledge_bases` 表。
-4. 实现创建、分页查询、详情、更新、删除。
-5. 为不存在资源返回 404。
+- **`str.replace` 不带 count 会替换所有同名片段**（症状：只改 `update_source` 的编辑同时改了 `ingest_source`，摄取开始覆盖人工/模型整理的正文，测试变红）。改多处出现的模式时，用更长的上下文锚定或显式限制次数。
+- **heredoc 与 `&&` 链会静默中断**（症状：下一次运行报 `NameError: 名字不存在`，其实文件压根没写进去——链中间那步失败了）。写文件后 `grep`/`wc -l` 确认，或把写入与运行分成两条命令。
+- **中文字符串会咬人**：在 Python f-string / heredoc 里写中文引号（`"…"`）容易破坏字符串字面量。改用 「」。
+- **迁移字典容易插出重名常量**（症状：新加的列生效了，同名的旧字典被覆盖、旧迁移列悄悄失效——实际发生在 `_DOCUMENT_COLUMN_MIGRATIONS` 上）。加字段前先 `grep` 同类字典，合并进去而不是新起一个同名常量。
+- **替换时先确认锚点唯一**：本仓库同一模式常出现在 `ingest_source` 与 `update_source`、中英两份文档里。
 
-验收：
-- `POST /api/knowledge-bases` 可创建知识库。
-- `GET /api/knowledge-bases?page=1&page_size=10` 可分页。
-- CRUD 单元测试通过。
+### 6.2 数据一致性（真 bug 多在这里）
 
-## 阶段 2：文档上传与分块
+- **SQLite 会复用行号**（症状：原地更新后文档静默失去全部向量）。删旧 chunk 再插新 chunk，新行可能拿到旧行 id；若向量 id 由行 id 派生，"先写新向量、再删旧向量"会把刚写入的当作旧的删掉。现在向量 id 含内容哈希（`_vector_id`）。
+- **跳过一步也要写派生字段**（症状：下一次更新找不到待删向量，向量库开始累积）。内容未变化时跳过重建索引后，新 chunk 行的 `vector_id` 是 NULL。跳过计算 ≠ 跳过记录。
+- **事务回滚不会撤销 Markdown 与 Chroma 的写入**（症状：SQLite 与工作区各说各话）。更新路径因此在新向量写成功后才删旧向量，并在 wiki 写入失败时用旧内容重建页面（`_restore_wiki`）。
+- **删除必须三处同步**：SQLite 记录、`raw/` 与 `wiki/` 文件、Chroma 向量。删完用 `ls` + `collection.get(where=...)` 双向确认（曾经确认过：删库后向量 0 条、工作区目录消失、库里无残留行）。
+- **`_merge_topic` 追加内容时会把标题和 bullet 焊在一起**（症状：`## Sources- [[sources/...]]`）。`_merge_topic` 已加"确保前面有空行"的护栏；`## Sources` 是文件最后一行时最容易触发。
+- **删除来源应成对删除"bullet + Tags 行"**：`_drop_source_line` 只删一行，更新路径已改用 `_drop_source_block`，删除路径仍只删一行（已知未修，见本地 TODO）。
+- **去重不能只看内容**：同一篇文章被两个平台转载是两份来源，按内容合并会丢掉 URL、平台、作者、抓取时间。
 
-目标：支持文本输入和 txt 上传，并保存 chunks。
+### 6.3 测量与性能（别靠猜）
 
-建议文件：
-- `backend/app/api/document_routes.py`
-- `backend/app/services/document_service.py`
-- `backend/app/services/chunk_service.py`
+- **先 profile 再改**（症状：连猜两次都错）。我先怀疑"每条边的 `find` 查找"、再怀疑"React 渲染 800 个节点"，CDP profiler 显示 60% 时间在布局的力计算里。
+- **dev 模式 React StrictMode 会把渲染跑两遍**（症状：浏览器测出 489ms，node 里同样代码只要 153ms）。性能结论必须在**生产构建**上取（`npm run build` + `vite preview`）。
+- **`vite preview`（sirv）会缓存 `index.html`**（症状：改动前后测出几乎一样的数字，其实测的是旧 bundle）。重新构建后必须重启 preview。
+- **`Math.hypot` 比 `Math.sqrt(a*a+b*b)` 慢得多**，热循环里别用（布局的斥力阶段每个 cell 都调一次）。
+- **向量检索必须有相似度下限**（`WIKI_QUERY_VECTOR_FLOOR=0.35`），否则任何查询都返回"最不无关"的页面，把"这个库答不了"伪装成有结果。
+- **引用数字必须能被复现**：写清构建方式、数据规模与命令；基准脚本要随仓库走（`npm run bench:layout`），别留在 `/tmp`。
 
-任务：
-1. 定义 `documents`、`document_chunks` 表。
-2. 实现文本上传接口：`POST /api/knowledge-bases/{kb_id}/documents/text`。
-3. 实现 txt 上传接口：`POST /api/knowledge-bases/{kb_id}/documents/file`。
-4. 实现文档列表、详情、删除。
-5. 分块策略：`chunk_size=500`，`chunk_overlap=80`；优先按段落，段落过长再固定长度切分。
+### 6.4 测试与验证
 
-验收：
-- 空文本失败。
-- 非 txt 文件失败。
-- 不存在知识库失败。
-- 上传后能看到 chunk 记录。
+- **测试失败时先怀疑测试的前提**（症状：以为是代码 bug，其实是断言写错）。两次是我的断言不成立（分块数随文本长度变化；两个不同标题不会并入同一主题页）；一次是 fixture 算术写错（`good_kept = kept - dropped` 重复扣减），**掩盖**了真实的规则缺陷——那次必须改代码而不是改断言。
+- **单元测试默认 `VECTOR_INDEX_ENABLED=false`**，会遮住整条向量路径。涉及向量的改动要在真实 Chroma 上跑一遍并核对条数（`collection.get(where={"document_id": ...})`）。
+- **本机 FastAPI 用惰性 `_IncludedRouter`**：遍历 `app.routes` 看不到路径，路由用测试或 `/openapi.json` 验证。
+- **读取路径是 `GET /api/documents/{id}`**（不在知识库下），写路径才是 `.../knowledge-bases/{id}/documents/...`。
+- **人工验收别只信界面**：先用 `curl` 打 API 确认数据层，再看界面（我遇到过一次"界面 0 条结果"其实是脚本时序问题，API 是好的）。
 
-## 阶段 3：Embedding 与 ChromaDB
+### 6.5 文档与协作
 
-目标：上传文档后自动向量化并写入 ChromaDB。
+- `docs/` 每份文档必须中英成对，数字、标识符、结构保持一致；改完用脚本核对，别靠人眼。
+- 改能力时同步 README 的能力清单、MCP 工具列表、路线图；`demo/` 截图会漂移。
+- `TODO.md` 不随仓库发布，公开文档不要链接它。
+- **不顺手改范围外的缺陷**：记进 `TODO.md`（带实测证据与验证方式），而不是悄悄改。
+- 提交信息说明"为什么"（尤其是与直觉相反的取舍），改动小、可回滚。
 
-建议文件：
-- `backend/app/services/embedding_service.py`
-- `backend/app/vector/chroma_client.py`
+---
 
-任务：
-1. 封装 sentence-transformers embedding。
-2. 封装 ChromaDB collection 初始化。
-3. 上传文档后为 chunks 生成向量。
-4. 写入 ChromaDB，metadata 至少包含 `knowledge_base_id`、`document_id`、`title`、`chunk_id`。
-5. 将 Chroma vector id 回写到 `document_chunks.vector_id`。
-6. 删除知识库/文档时同步删除向量。
+## 7. 历史阶段（MVP 交付记录，已完成）
 
-验收：
-- 上传《春》《故乡》后 Chroma 中有对应向量。
-- 删除文档后对应向量不可再被检索。
+阶段 0–7 是早期 MVP 的交付顺序，保留作为"哪一层是谁建的"的索引；当前实现契约以架构文档与测试为准。
 
-## 阶段 4：语义检索与流式接口
+| 阶段 | 交付 | 今天在代码里的位置 |
+| --- | --- | --- |
+| 0 仓库与环境 | 三模块骨架、`.gitignore`、README、`.env.example` | 仓库根目录 |
+| 1 Backend 基础 API | FastAPI + SQLite + 知识库 CRUD | `app/api/knowledge_routes.py` |
+| 2 文档上传与分块 | 文本 / `.txt` 上传、`chunk_size=500`、`chunk_overlap=80` | `app/services/document_service.py` |
+| 3 Embedding 与 ChromaDB | `sentence-transformers`、向量写入与回写、删除同步 | `app/services/embedding_service.py`、`app/vector/chroma_client.py` |
+| 4 语义检索与 SSE | `POST /api/search`、`/api/search/stream`（`start/delta/result/error/done`） | `app/api/search_routes.py` |
+| 5 Frontend Demo | 单页工作台、POST SSE 消费 | `frontend/src/App.tsx` |
+| 6 MCP Server | 只调 Backend HTTP，工具化检索 | `mcp-server/tools.py` |
+| 7 测试与交付 | pytest 套件、README 启动与演示说明 | `backend/tests/`、`mcp-server/tests/` |
 
-目标：完成普通搜索和 SSE 流式搜索。
+---
 
-建议文件：
-- `backend/app/api/search_routes.py`
-- `backend/app/services/retrieval_service.py`
-- `backend/app/services/stream_service.py`
+## 8. 参考
 
-任务：
-1. 实现 `POST /api/search`。
-2. 校验 query 非空、知识库存在、top_k 合理。
-3. query embedding 后按 `knowledge_base_id` 过滤 Chroma。
-4. 返回 document_id、title、chunk、score。
-5. 实现 `POST /api/search/stream`，返回 `text/event-stream`。
-6. 流式事件类型：`start`、`delta`、`result`、`error`、`done`。
-
-验收：
-- 搜索“春天”返回《春》。
-- 搜索“少年闰土”返回《故乡》。
-- 搜索“小孩子”返回《故乡》。
-- 流式接口能逐步返回事件。
-
-## 阶段 5：Frontend Demo
-
-目标：用单页完成面试演示路径。
-
-布局：
-- 左侧：知识库列表与创建。
-- 中间：文本输入和 txt 上传。
-- 右侧：搜索框与流式结果。
-
-建议文件：
-- `frontend/src/api/client.ts`
-- `frontend/src/api/knowledge.ts`
-- `frontend/src/api/documents.ts`
-- `frontend/src/api/search.ts`
-- `frontend/src/components/KnowledgeBaseList.tsx`
-- `frontend/src/components/DocumentUploader.tsx`
-- `frontend/src/components/SearchPanel.tsx`
-- `frontend/src/components/StreamingResult.tsx`
-- `frontend/src/App.tsx`
-
-任务：
-1. 创建和选择知识库。
-2. 上传文本和 txt 文件。
-3. 普通搜索和流式搜索。
-4. 使用 `fetch + ReadableStream` 处理 POST SSE。
-
-验收：
-- 浏览器中可完成创建知识库、上传《春》《故乡》、搜索和流式展示。
-
-## 阶段 6：MCP Server
-
-目标：让 Agent 能通过 MCP Tool 查询知识库。
-
-建议文件：
-- `mcp-server/server.py`
-- `mcp-server/tools.py`
-
-必做工具：
-- `search_knowledge_base(query: str, knowledge_base_id: int, top_k: int = 5)`
-
-加分工具：
-- `list_knowledge_bases`
-- `add_text_document`
-
-任务：
-1. MCP Server 只调用 Backend HTTP API。
-2. 默认 Backend 地址从 `BACKEND_API_URL` 读取。
-3. HTTP timeout 设置为 10 秒。
-4. 处理后端不可用、404、超时、空结果。
-
-验收：
-- Agent 可配置并调用 `search_knowledge_base`。
-- Backend 未启动时返回明确错误。
-
-## 阶段 7：测试与交付
-
-目标：项目可验证、可演示、可讲解。
-
-Backend 测试：
-- `test_knowledge.py`
-- `test_upload.py`
-- `test_search.py`
-
-MCP 测试：
-- `test_mcp_tool.py`
-
-文档：
-- README 增加启动方式、API 示例、MCP 配置、面试演示流程、后续优化方向。
-- 后续优化必须保留两条方向：升级 LLM RAG 为流式回答；封装 MCP Server 做 Agent 外接知识库。
-
-MVP 验收标准：
-- 可以创建、查询、更新、删除知识库。
-- 知识库列表支持分页。
-- 可以直接输入文本和上传 txt 文件。
-- 上传后自动分块和向量化。
-- 可以语义搜索并流式返回结果。
-- MCP Server 提供 `search_knowledge_base`。
-- 常见错误均有明确响应。
+- 产品与用法：[README.md](README.md)（中文：[README_CN.md](README_CN.md)）
+- 实现设计与数据归属：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（EN：`docs/ARCHITECTURE_EN.md`）
+- 检索如何打分与选策略：[docs/RETRIEVAL_CN.md](docs/RETRIEVAL_CN.md)（EN：`docs/RETRIEVAL.md`）
+- 反馈闭环与失效模式：[docs/SELF_EVOLUTION_CN.md](docs/SELF_EVOLUTION_CN.md)（EN：`docs/SELF_EVOLUTION.md`）
+- 本地部署与排错：[docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md)（EN：`docs/LOCAL_INSTALLATION_EN.md`）
+- 外部 Agent 的操作流程：[skills/agentkb-retrieval/SKILL.md](skills/agentkb-retrieval/SKILL.md)
