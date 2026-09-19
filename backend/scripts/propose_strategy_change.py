@@ -73,9 +73,12 @@ def compare(default_id: str, results: dict[str, dict]) -> dict[str, dict]:
             base = baseline[index] if index < len(baseline) else None
             if base is None:
                 continue
-            if row["kept"] < base["kept"]:
+            if row["good_kept"] < base["good_kept"]:
                 regressions.append(row)
-            if row["rating"] == -1 and row["changed"] and not base["changed"]:
+            # An improvement means hiding a citation the person flagged, which the default
+            # still returns. "The result set changed" is not enough: reordering or adding a
+            # link hop changes the set without addressing what was wrong.
+            if row.get("flagged_dropped", 0) > base.get("flagged_dropped", 0):
                 improvements.append(row)
         comparisons[strategy_id] = {"regressions": regressions, "improvements": improvements}
     return comparisons
@@ -84,8 +87,8 @@ def compare(default_id: str, results: dict[str, dict]) -> dict[str, dict]:
 def recommendation(default_id: str, results: dict[str, dict]) -> tuple[str, str]:
     """Return (recommended strategy id, reason). Never recommends a losing candidate."""
     baseline_liked = [row for row in results[default_id]["rows"] if row["rating"] == 1]
-    baseline_kept = sum(row["kept"] for row in baseline_liked)
-    baseline_recorded = sum(row["recorded"] for row in baseline_liked)
+    baseline_kept = sum(row["good_kept"] for row in baseline_liked)
+    baseline_recorded = sum(row["good_recorded"] for row in baseline_liked)
     if not baseline_recorded:
         return default_id, "没有任何 👍 用例带引用记录，缺少可比对的证据。"
 
@@ -102,14 +105,15 @@ def recommendation(default_id: str, results: dict[str, dict]) -> tuple[str, str]
     improving = {sid: item for sid, item in safe.items() if item["improvements"]}
     if not improving:
         return default_id, (
-            f"候选策略（{'、'.join(safe)}）保留了全部 👍 引用，但没有改变任何默认策略没改变过的 👎 用例，"
-            "换上它们只是多付成本。"
+            f"候选策略（{'、'.join(safe)}）保留了全部 👍 引用，但没有隐藏任何默认策略仍会返回的、"
+            "被指认过的无用引用，换上它们只是多付成本。"
         )
 
     best_id, best = max(improving.items(), key=lambda item: len(item[1]["improvements"]))
     return best_id, (
-        f"`{best_id}` 保留了全部 👍 引用，并且改变了 {len(best['improvements'])} 个默认策略未曾改变的 👎 用例。"
-        "这值得人工判断，但证据本身只说明「首条证据变了」，不说明「变得对了」。"
+        f"`{best_id}` 保留了全部 👍 引用，并且在 {len(best['improvements'])} 个 👎 用例上隐藏了"
+        "默认策略仍会返回的、被指认过的无用引用。"
+        "这比「结果变了」强，但它仍然不是「答案对了」——被指认过的引用只是人当时的主观判断。"
     )
 
 
@@ -126,7 +130,7 @@ def render_proposal(kb_id: int | None, default_id: str, results: dict[str, dict]
         "",
         "## 证据",
         "",
-        "| 策略 | 👍 引用保留 | 相对默认的回归 | 相对默认的新改变 | 平均关联页 | 平均跳数 |",
+        "| 策略 | 👍 引用保留 | 相对默认的回归 | 相对默认隐藏的无用引用 | 平均关联页 | 平均跳数 |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     comparisons = compare(default_id, results)
@@ -154,11 +158,16 @@ def render_proposal(kb_id: int | None, default_id: str, results: dict[str, dict]
         for row in noteworthy:
             flag = "👍" if row["rating"] == 1 else "👎"
             lines.append(
-                f"- {flag} `{row['query']}` — 引用保留 {row['kept']}/{row['recorded']}，"
+                f"- {flag} `{row['query']}` — 有用引用保留 {row['good_kept']}/{row['good_recorded']}，"
                 f"直接 {row['direct']} 关联 {row['related']}，跳数 {row['hops']}"
             )
             if row["recorded_top"] != row["top"]:
                 lines.append(f"  - 首条证据：`{row['recorded_top']}` → `{row['top']}`")
+            if row.get("flagged"):
+                lines.append(
+                    f"  - 被指认的无用引用 {row['flagged']} 条：仍返回 {row['flagged_kept']} 条，"
+                    f"已隐藏 {row['flagged_dropped']} 条"
+                )
         lines.append("")
 
     lines += [
@@ -167,6 +176,7 @@ def render_proposal(kb_id: int | None, default_id: str, results: dict[str, dict]
         "- 没有标注答案，「首条证据变了」不等于「变得对了」。",
         "- 只覆盖有人评过的问题，而人们倾向于只评判那些感觉不对的问题。",
         "- 工作区里根本没有的材料，任何策略都召不回来，它们看起来会一样好。",
+        "- 「隐藏了被指认的引用」只说明它不再重复同一次错误，不说明新的结果是对的。",
         "- 因此上面这一条建议只是「值得人工看一眼」，不是「应该合并」。",
         "",
         "## 如果决定推进",

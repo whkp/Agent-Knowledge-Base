@@ -60,11 +60,13 @@ per-case differences relative to the current default, and the exact change to ma
 1. **A regression is decisive.** If a strategy keeps fewer liked citations than the current
    default, do not propose it, whatever its other numbers say. `local` dropping liked
    citations is the clearest example: link expansion is earning its cost.
-2. **Relative to the default, not to the recording.** A candidate only counts as changing a
-   case when the default did *not* already change it. Otherwise a scoring change made months
-   ago makes every candidate look like an improvement.
+2. **Relative to the default, not to the recording.** A candidate only counts as improving a
+   case when it hides a citation that was flagged as wrong *and* the default still returns it.
+   Otherwise a scoring change made months ago makes every candidate look like an improvement.
+   Reordering the result or adding a link hop is not an improvement on its own.
 3. **Never write a recommendation the evidence cannot support.** "The top citation changed"
-   is not "the answer got better". There are no gold answers.
+   is not "the answer got better", and neither is "a flagged citation disappeared": the flag
+   is one person's judgement at one moment. There are no gold answers.
 4. **Never edit retrieval to work around the gate.** The strategy set is code so that changes
    are reviewed and tested. Do not add a hidden flag, a runtime override, or an
    environment-only tweak that bypasses `retrieval_strategy.py` and its tests.
@@ -94,7 +96,8 @@ Give the user, in this order:
 
 1. What the recorded signal says (how many ratings, what they were).
 2. The table from the proposal, with the current default marked.
-3. Which cases changed and how the top citation moved.
+3. Which cases changed, how the top citation moved, and whether the citations people
+   flagged are still coming back.
 4. What the evidence cannot show.
 5. A recommendation that is either a specific change with its file and line, or "keep the
    default".

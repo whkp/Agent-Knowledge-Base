@@ -422,6 +422,8 @@ class QueryFeedbackCreate(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     strategy_id: str | None = Field(default=None, max_length=40)
     source_paths: list[str] = Field(default_factory=list, max_length=50)
+    # Only meaningful with a thumbs down; rejected with a thumbs up rather than dropped.
+    bad_paths: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("query")
     @classmethod
@@ -430,6 +432,14 @@ class QueryFeedbackCreate(BaseModel):
         if not value:
             raise ValueError("Query cannot be empty.")
         return value
+
+    @field_validator("bad_paths")
+    @classmethod
+    def validate_bad_paths(cls, value: list[str], info) -> list[str]:
+        paths = [item.strip() for item in value if item.strip()]
+        if paths and info.data.get("rating") == 1:
+            raise ValueError("A thumbs up cannot mark a citation as wrong.")
+        return list(dict.fromkeys(paths))
 
     @field_validator("note")
     @classmethod
@@ -452,6 +462,7 @@ class QueryFeedbackRead(BaseModel):
     model: str | None
     strategy_id: str | None
     source_paths: list[str]
+    bad_paths: list[str]
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

@@ -115,4 +115,7 @@ class QueryFeedback(Base):
     model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     strategy_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     source_paths: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Citations the person marked as wrong on a thumbs down. Still not a gold label, but it
+    # says *which* piece of evidence misled the answer instead of only that it was bad.
+    bad_paths: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

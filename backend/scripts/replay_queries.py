@@ -5,8 +5,8 @@ that one strategy is better. What it can tell you is concrete and checkable:
 
 - For questions a person marked 👍: does the strategy still retrieve the pages that
   answer was built on? Losing them is a regression.
-- For questions a person marked 👎: does the strategy actually change the result? A
-  strategy that returns the same wrong pages is not an improvement.
+- For questions a person marked 👎: does the strategy drop the citations that person
+  flagged as misleading? Keeping them, or merely reordering the set, is not an improvement.
 - What each strategy costs in linked pages and link hops.
 
 Replays never write to `log.md`, so running this a hundred times leaves the workspace's
@@ -72,6 +72,14 @@ def replay(row: QueryFeedback, strategy_id: str, top_k: int) -> dict:
     recorded = [path for path in row.source_paths if path.endswith(".md")]
     kept = [path for path in recorded if path in retrieved]
     top = retrieved[0] if retrieved else None
+    # Citations the person flagged as misleading. Still retrieved ones are the strongest
+    # signal available: a strategy that hides them is worth a look, one that keeps them is not.
+    flagged = [path for path in (row.bad_paths or []) if path in recorded or path.startswith("document:")]
+    still_flagged = [path for path in flagged if path in retrieved]
+    # A citation that was flagged must not count as a loss when a strategy hides it, so the
+    # "should have been kept" set excludes it. Otherwise hiding bad evidence looks like a
+    # regression and no candidate can ever win.
+    worth_keeping = [path for path in recorded if path not in flagged]
     return {
         "query": row.query,
         "rating": row.rating,
@@ -87,6 +95,12 @@ def replay(row: QueryFeedback, strategy_id: str, top_k: int) -> dict:
         "changed": top_changed(recorded, top),
         "top": top,
         "recorded_top": recorded[0] if recorded else None,
+        "good_recorded": len(worth_keeping),
+        "good_kept": len([path for path in worth_keeping if path in retrieved]),
+        "flagged": len(flagged),
+        "flagged_kept": len(still_flagged),
+        "flagged_dropped": len(flagged) - len(still_flagged),
+        "flagged_paths": still_flagged,
     }
 
 
@@ -100,8 +114,8 @@ def top_changed(recorded: list[str], top: str | None) -> bool:
 def summarise(rows: list[dict]) -> dict:
     liked = [row for row in rows if row["rating"] == 1]
     disliked = [row for row in rows if row["rating"] == -1]
-    recorded_total = sum(row["recorded"] for row in liked)
-    kept_total = sum(row["kept"] for row in liked)
+    recorded_total = sum(row["good_recorded"] for row in liked)
+    kept_total = sum(row["good_kept"] for row in liked)
     return {
         "cases": len(rows),
         "liked": len(liked),
@@ -109,6 +123,8 @@ def summarise(rows: list[dict]) -> dict:
         "kept_on_liked": kept_total,
         "recorded_on_liked": recorded_total,
         "changed_on_disliked": sum(1 for row in disliked if row["changed"]),
+        "flagged": sum(row.get("flagged", 0) for row in rows),
+        "flagged_dropped": sum(row.get("flagged_dropped", 0) for row in rows),
         "average_related": round(sum(row["related"] for row in rows) / len(rows), 2) if rows else 0.0,
         "average_hops": round(sum(row["hops"] for row in rows) / len(rows), 2) if rows else 0.0,
     }
@@ -153,6 +169,8 @@ def main() -> int:
         )
         print(f"== 策略 {strategy_id} ==")
         print(f"   👍 用例仍找到原引用：{keep}    👎 用例结果发生变化：{summary['changed_on_disliked']}/{summary['disliked']}")
+        if summary["flagged"]:
+            print(f"   被指认的无用引用：{summary['flagged']} 条，其中 {summary['flagged_dropped']} 条已不再返回")
         print(f"   平均关联页 {summary['average_related']}   平均跳数 {summary['average_hops']}")
         for row in payload["rows"]:
             flag = "👍" if row["rating"] == 1 else "👎"

@@ -55,6 +55,7 @@ _DOCUMENT_COLUMN_MIGRATIONS = {
 
 _FEEDBACK_COLUMN_MIGRATIONS: dict[str, str] = {
     "strategy_id": "VARCHAR(40)",
+    "bad_paths": "JSON",
 }
 
 
@@ -67,6 +68,9 @@ def _add_missing_columns(bind: Engine, inspector, tables: set[str], table: str, 
         for column, definition in migrations.items():
             if column not in existing:
                 connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                if definition == "JSON":
+                    # Existing rows must read as an empty list, not as NULL.
+                    connection.exec_driver_sql(f"UPDATE {table} SET {column} = '[]' WHERE {column} IS NULL")
 
 
 def ensure_schema_compatibility(bind: Engine) -> None:

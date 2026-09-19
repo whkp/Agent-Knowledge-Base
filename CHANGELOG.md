@@ -16,5 +16,7 @@ All notable changes to AgentKB will be documented here.
 - Added `TODO.md` as the working plan, and shortened the README roadmap to point at it.
 - Reworked page retrieval: CJK bigram query terms, BM25 scoring with length normalisation, and adaptive link expansion that only spends a second hop when the direct matches are weak.
 - Added named retrieval strategies (`auto`, `local`, `deep`, `hybrid`, `planned`) that can be chosen per query from the API, the workbench, or MCP, and are reported back in the response and stored with feedback. Page-level vector recall is opt-in and falls back to lexical ranking when embeddings are unavailable.
+- A thumbs down can now name **which citations were wrong** (`bad_paths`), and the workbench offers a "which citation was wrong" picker. Replay and the proposal script judge at page level: a flagged citation is excluded from the "should have been kept" set, and a candidate only counts as an improvement when it hides a flagged citation the default still returns.
+- Added a read-only **feedback sheet** to the workbench: ratings in reverse chronological order with totals, the strategy in force and the flagged citations.
 - Added `backend/scripts/replay_queries.py`, which replays recorded feedback against every strategy to show which citations survive and what each strategy costs.
 - Added per-answer feedback (thumbs up / thumbs down with an optional reason) as the signal future retrieval evaluation and strategy evolution will read. Ratings live in SQLite and are never written into the Markdown workspace.

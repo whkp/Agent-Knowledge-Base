@@ -118,13 +118,20 @@ Every response reports what happened, not what was asked for:
 | `planned` | whether the model supplied extra search terms |
 
 These four fields are what make feedback analysable: a 👍 or 👎 without them says nothing
-about *which* configuration was being judged.
+about *which* configuration was being judged. A thumbs down can additionally flag which
+citations were wrong (`bad_paths`), which is what lets replay ask a page-level question
+instead of a set-level one.
 
 ### Choosing from the workbench
 
 The query dock has a strategy picker. Whatever it is set to is sent with the question and
 recorded with the rating, so a person can try `hybrid` on a question that `auto` fumbled and
 have that comparison land in the feedback table.
+
+Ratings can be read back in the workbench's **feedback sheet**: ratings in reverse
+chronological order with the question, the reason, the strategy in force and the flagged
+citations, plus a way to put a question back into the composer and re-run it. That sheet is
+read-only and adds no new write path.
 
 ### Choosing from MCP
 

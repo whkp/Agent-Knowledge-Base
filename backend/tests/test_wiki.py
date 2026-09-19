@@ -639,9 +639,9 @@ def test_replay_summary_separates_liked_from_disliked():
 
     summary = replay.summarise(
         [
-            {"rating": 1, "recorded": 4, "kept": 4, "changed": False, "related": 2, "hops": 2},
-            {"rating": 1, "recorded": 2, "kept": 1, "changed": True, "related": 0, "hops": 1},
-            {"rating": -1, "recorded": 1, "kept": 1, "changed": False, "related": 0, "hops": 1},
+            {"rating": 1, "recorded": 4, "kept": 4, "good_recorded": 4, "good_kept": 4, "changed": False, "related": 2, "hops": 2},
+            {"rating": 1, "recorded": 2, "kept": 1, "good_recorded": 2, "good_kept": 1, "changed": True, "related": 0, "hops": 1},
+            {"rating": -1, "recorded": 1, "kept": 1, "good_recorded": 1, "good_kept": 1, "changed": False, "related": 0, "hops": 1},
         ]
     )
 
@@ -913,7 +913,12 @@ def load_proposal_module():
 
 
 def row(rating: int, kept: int, recorded: int, changed: bool = False, hops: int = 1) -> dict:
-    return {"query": "q", "rating": rating, "kept": kept, "recorded": recorded, "changed": changed, "hops": hops, "related": 0, "direct": 1, "top": None}
+    return {
+        "query": "q", "rating": rating, "kept": kept, "recorded": recorded,
+        "good_kept": kept, "good_recorded": recorded,
+        "changed": changed, "hops": hops, "related": 0, "direct": 1, "top": None,
+        "flagged": 0, "flagged_kept": 0, "flagged_dropped": 0,
+    }
 
 
 def test_top_changed_compares_the_leading_citation_only():
@@ -951,17 +956,18 @@ def test_a_candidate_that_loses_a_liked_citation_is_never_recommended():
     assert "保持现状" in reason
 
 
-def test_a_candidate_that_changes_a_case_the_default_left_alone_is_proposed():
+def test_a_changed_result_alone_is_not_enough_to_propose_a_strategy():
+    """Reordering the evidence changes the result without addressing what was wrong."""
     proposal = load_proposal_module()
     results = {
-        "auto": {"rows": [row(1, 4, 4), row(-1, 4, 4, changed=False)]},
-        "hybrid": {"rows": [row(1, 4, 4), row(-1, 4, 4, changed=True)]},
+        "auto": {"rows": [flagged_row(1, 4, 4, 0), flagged_row(-1, 4, 4, 0)]},
+        "deep": {"rows": [flagged_row(1, 4, 4, 0), {**flagged_row(-1, 4, 4, 0), "changed": True, "hops": 2}]},
     }
 
     chosen, reason = proposal.recommendation("auto", results)
 
-    assert chosen == "hybrid"
-    assert "值得人工判断" in reason
+    assert chosen == "auto"
+    assert "多付成本" in reason
 
 
 def test_proposal_lists_what_the_evidence_cannot_show():
@@ -973,3 +979,58 @@ def test_proposal_lists_what_the_evidence_cannot_show():
     assert "不能说明什么" in text
     assert "相对当前默认策略" in text
     assert "WIKI_QUERY_DEFAULT_STRATEGY" in text
+
+
+def flagged_row(rating: int, kept: int, recorded: int, dropped: int, flagged: int = 1) -> dict:
+    """A replay row for a case where a person flagged one citation as misleading."""
+    return {
+        "query": "q", "rating": rating, "kept": kept, "recorded": recorded,
+        # kept already excludes any flagged citation that was dropped: good_kept adds back
+        # the ones that are still worth keeping.
+        "good_kept": kept - flagged + dropped, "good_recorded": recorded - flagged,
+        "changed": False, "hops": 1, "related": 0, "direct": 1, "top": None,
+        "flagged": flagged, "flagged_kept": flagged - dropped, "flagged_dropped": dropped,
+    }
+
+
+def test_hiding_a_flagged_citation_counts_as_an_improvement():
+    """Dropping evidence a person called wrong is stronger than "the result changed"."""
+    proposal = load_proposal_module()
+    results = {
+        "auto": {"rows": [flagged_row(1, 4, 4, 0), flagged_row(-1, 4, 4, 0)]},
+        "hybrid": {"rows": [flagged_row(1, 4, 4, 0), flagged_row(-1, 3, 4, 1)]},
+    }
+
+    chosen, reason = proposal.recommendation("auto", results)
+
+    assert chosen == "hybrid"
+    assert "隐藏" in reason
+    assert "不是「答案对了」" in reason
+
+
+def test_replay_reports_flagged_citations(client: TestClient):
+    """A flagged citation that no longer matches the question is counted as hidden."""
+    replay = load_replay_module()
+    kb = create_kb(client, "投资笔记")
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/无关.md",
+        json={"path": "wiki/topics/无关.md", "content": "# 无关\n\n今天多云。\n"},
+    )
+    client.put(
+        f"/api/knowledge-bases/{kb['id']}/wiki/pages/wiki/topics/资产配置入门.md",
+        json={"path": "wiki/topics/资产配置入门.md", "content": "# 资产配置入门\n\n先建立应急金，再配置权益类资产。\n"},
+    )
+    row = QueryFeedback(
+        knowledge_base_id=kb["id"],
+        mode="wiki",
+        query="资产配置",
+        rating=-1,
+        source_paths=["wiki/topics/资产配置入门.md", "wiki/topics/无关.md"],
+        bad_paths=["wiki/topics/无关.md"],
+    )
+
+    result = replay.replay(row, "local", 8)
+
+    assert result["flagged"] == 1
+    assert result["flagged_kept"] == 0, "the flagged page does not match the question at all"
+    assert result["flagged_dropped"] == 1

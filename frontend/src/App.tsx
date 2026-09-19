@@ -8,6 +8,7 @@ import {
   ChevronRight,
   FilePlus2,
   FileText,
+  Flag,
   GitBranch,
   HeartPulse,
   Loader2,
@@ -28,7 +29,8 @@ import {
 import { uploadTextDocument, uploadTxtDocument } from "./api/documents";
 import { createKnowledgeBase, listKnowledgeBases } from "./api/knowledge";
 import { getLLMConfig, testLLMConfig, updateLLMConfig } from "./api/llm";
-import { submitQueryFeedback } from "./api/feedback";
+import { listQueryFeedback, submitQueryFeedback } from "./api/feedback";
+import type { QueryFeedback } from "./api/feedback";
 import { searchKnowledgeBase } from "./api/search";
 import { getWikiGraph, getWikiStatus, lintWiki, listAllWikiPages, listRetrievalStrategies, queryWiki, readWikiPage, saveWikiPage } from "./api/wiki";
 import type { RetrievalStrategy } from "./api/wiki";
@@ -65,13 +67,14 @@ const filters: Array<{ id: PageFilter; label: string }> = [
   { id: "query", label: "查询" },
 ];
 
-type CanvasView = "page" | "graph" | "lint";
+type CanvasView = "page" | "graph" | "lint" | "feedback";
 
 /** The canvas shows one sheet at a time: the page, its link structure, or a health check. */
 const canvasViews: Array<{ id: CanvasView; label: string; icon: typeof FileText }> = [
   { id: "page", label: "页面", icon: FileText },
   { id: "graph", label: "图谱", icon: Network },
   { id: "lint", label: "检查", icon: ShieldCheck },
+  { id: "feedback", label: "反馈", icon: Flag },
 ];
 
 const issueLabels: Record<string, string> = {
@@ -114,6 +117,8 @@ export default function App() {
   const [graph, setGraph] = useState<WikiGraph | null>(null);
   const [view, setView] = useState<CanvasView>("page");
   const [creatingPath, setCreatingPath] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<QueryFeedback[]>([]);
+  const [feedbackTotals, setFeedbackTotals] = useState({ positive: 0, negative: 0 });
   const [serverLLM, setServerLLM] = useState<LLMConfigStatus | null>(null);
   const [llmForm, setLLMForm] = useState<LLMFormState>(() => defaultLLMForm());
   const [loading, setLoading] = useState(false);
@@ -310,6 +315,20 @@ export default function App() {
     if (next === "lint" && selected) {
       void handleLint();
     }
+    if (next === "feedback" && selected) {
+      void handleFeedback();
+    }
+  }
+
+  async function handleFeedback() {
+    if (!selected) return;
+    try {
+      const page = await listQueryFeedback(selected.id);
+      setFeedback(page.items);
+      setFeedbackTotals({ positive: page.positive, negative: page.negative });
+    } catch (error) {
+      notify({ type: "error", message: error instanceof Error ? error.message : "反馈读取失败" });
+    }
   }
 
   /** Turns an unresolved [[link]] into a real page so the wiki keeps its shape. */
@@ -496,10 +515,15 @@ export default function App() {
                   <Network size={15} />
                   知识图谱 · {graph?.nodes.length ?? 0} 页面 · {graph?.edges.length ?? 0} 链接 · 由 Markdown 链接派生
                 </div>
-              ) : (
+              ) : view === "lint" ? (
                 <div className="path-label">
                   <ShieldCheck size={15} />
                   知识库检查 · {lintResult?.checked_pages ?? 0} 页面 · {lintResult?.issues.length ?? 0} 项问题
+                </div>
+              ) : (
+                <div className="path-label">
+                  <Flag size={15} />
+                  回答反馈 · {feedbackTotals.positive} 有用 · {feedbackTotals.negative} 没用
                 </div>
               )}
             </div>
@@ -542,6 +566,13 @@ export default function App() {
             </div>
           ) : view === "graph" ? (
             <GraphSheet graph={graph} onOpenPage={(path) => { setView("page"); void openPage(path); }} />
+          ) : view === "feedback" ? (
+            <FeedbackSheet
+              items={feedback}
+              totals={feedbackTotals}
+              onReuse={(value) => { setQuery(value); setView("page"); }}
+              onRefresh={() => void handleFeedback()}
+            />
           ) : (
             <LintSheet
               report={lintResult}
@@ -870,7 +901,7 @@ function QueryResult({ knowledgeBaseId, result, onOpenPage }: { knowledgeBaseId:
       answerMode={result.answer_mode}
       model={result.model}
       strategyId={result.strategy ?? null}
-      sourcePaths={result.results.map((item) => item.path)}
+      citations={result.results.map((item, index) => ({ value: item.path, label: `[${index + 1}] ${item.title}` }))}
     />
   </div>;
 }
@@ -897,7 +928,7 @@ function RagResult({ knowledgeBaseId, result }: { knowledgeBaseId: number | null
       answerMode={result.answer_mode}
       model={result.model}
       strategyId={null}
-      sourcePaths={result.results.map((item) => `document:${item.document_id}#${item.chunk_index ?? "-"}`)}
+      citations={result.results.map((item, index) => ({ value: `document:${item.document_id}#${item.chunk_index ?? "-"}`, label: `[${index + 1}] ${item.title}` }))}
     />
   </div>;
 }
@@ -906,17 +937,18 @@ function RagResult({ knowledgeBaseId, result }: { knowledgeBaseId: number | null
  * One rating per answer. A thumbs down asks why before it is recorded, because a
  * bare negative tells a later evaluation nothing it can act on.
  */
-function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, query, sourcePaths, strategyId }: {
+function FeedbackControl({ answer, answerMode, citations, knowledgeBaseId, mode, model, query, strategyId }: {
   answer: string;
   answerMode: string | null;
+  citations: Array<{ value: string; label: string }>;
   knowledgeBaseId: number | null;
   mode: "wiki" | "rag";
   model: string | null;
   query: string;
-  sourcePaths: string[];
   strategyId: string | null;
 }) {
   const [rating, setRating] = useState<1 | -1 | 0>(0);
+  const [bad, setBad] = useState<string[]>([]);
   const [note, setNote] = useState("");
   const [asking, setAsking] = useState(false);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
@@ -925,6 +957,7 @@ function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, que
   // A new or re-run answer starts from a clean rating.
   useEffect(() => {
     setRating(0);
+    setBad([]);
     setNote("");
     setAsking(false);
     setState("idle");
@@ -936,7 +969,7 @@ function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, que
     if (asking) rootRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [asking]);
 
-  async function send(next: 1 | -1, reason: string) {
+  async function send(next: 1 | -1, reason: string, flagged: string[] = []) {
     if (!knowledgeBaseId) return;
     setRating(next);
     setAsking(false);
@@ -951,7 +984,8 @@ function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, que
         answer_mode: answerMode,
         model,
         strategy_id: strategyId,
-        source_paths: sourcePaths.slice(0, 50),
+        source_paths: citations.map((item) => item.value).slice(0, 50),
+        bad_paths: flagged.slice(0, 50),
       });
       setState("saved");
     } catch {
@@ -989,7 +1023,7 @@ function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, que
       {asking ? (
         <form
           className="feedback-note"
-          onSubmit={(event) => { event.preventDefault(); void send(-1, note); }}
+          onSubmit={(event) => { event.preventDefault(); void send(-1, note, bad); }}
         >
           <textarea
             autoFocus
@@ -999,8 +1033,30 @@ function FeedbackControl({ answer, answerMode, knowledgeBaseId, mode, model, que
             placeholder="哪里不对？可以留空"
             disabled={state === "saving"}
           />
+          {citations.length ? (
+            <div className="feedback-flags">
+              <span className="feedback-flags-label">哪条引用不对（可留空）</span>
+              <div className="feedback-flags-list">
+                {citations.map((citation) => {
+                  const active = bad.includes(citation.value);
+                  return (
+                    <button
+                      type="button"
+                      key={citation.value}
+                      className={`flag-chip ${active ? "active" : ""}`}
+                      aria-pressed={active}
+                      disabled={state === "saving"}
+                      onClick={() => setBad((current) => (active ? current.filter((item) => item !== citation.value) : [...current, citation.value]))}
+                    >
+                      {citation.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <div className="feedback-note-actions">
-            <button type="button" className="text-button" onClick={() => { setAsking(false); setRating(0); }}>取消</button>
+            <button type="button" className="text-button" onClick={() => { setAsking(false); setRating(0); setBad([]); }}>取消</button>
             <button type="submit" className="secondary-button compact" disabled={state === "saving"}>提交反馈</button>
           </div>
         </form>
@@ -1418,6 +1474,64 @@ function PageLinks({ page, graph, creatingPath, onCreatePage, onOpenPage }: {
         </div>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * The recorded ratings, read back. This is the signal retrieval is judged on, so it belongs
+ * in the workbench rather than only behind an API.
+ */
+function FeedbackSheet({ items, onRefresh, onReuse, totals }: {
+  items: QueryFeedback[];
+  onRefresh: () => void;
+  onReuse: (query: string) => void;
+  totals: { positive: number; negative: number };
+}) {
+  if (!items.length) {
+    return (
+      <div className="sheet-stage">
+        <div className="sheet-note">
+          还没有评分。在每个回答下方点「有用」或「没用」，这里会显示记录下来的信号。
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sheet-stage lint-sheet">
+      <div className="lint-summary healthy">
+        <Flag size={20} />
+        <div>
+          <h3>{items.length} 条评分</h3>
+          <p>
+            有用 {totals.positive} · 没用 {totals.negative}。评分记录了当时的检索策略与引用，
+            是回放与提案唯一的依据；点问题可以把它填回查询框重跑。
+          </p>
+        </div>
+        <button className="secondary-button compact" onClick={onRefresh}>重新读取</button>
+      </div>
+      <ul className="feedback-list">
+        {items.map((item) => (
+          <li key={item.id}>
+            <span className={`rating-badge ${item.rating === 1 ? "positive" : "negative"}`}>
+              {item.rating === 1 ? "有用" : "没用"}
+            </span>
+            <div className="feedback-body">
+              <div className="feedback-head">
+                <button type="button" className="issue-path" onClick={() => onReuse(item.query)}>{item.query}</button>
+                <em>{item.mode}</em>
+                {item.strategy_id ? <em>策略 {item.strategy_id}</em> : null}
+                <small>{new Date(item.created_at).toLocaleString("zh-CN")}</small>
+              </div>
+              {item.note ? <p>{item.note}</p> : null}
+              {item.bad_paths.length ? (
+                <p className="feedback-flagged">指认的无用引用：{item.bad_paths.join("、")}</p>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

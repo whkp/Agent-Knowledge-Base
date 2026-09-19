@@ -80,3 +80,36 @@ def test_feedback_is_not_written_into_the_wiki(client: TestClient):
     after = client.get(f"/api/knowledge-bases/{kb['id']}/wiki/pages?page_size=50").json()
     assert after["total"] == before["total"]
     assert "这条反馈不该出现在 wiki 里" not in str(after)
+
+
+def test_a_thumbs_down_can_name_the_citations_that_misled_it(client: TestClient):
+    kb = create_kb(client)
+
+    created = rate(
+        client,
+        kb["id"],
+        rating=-1,
+        note="引用的第一页和问题无关",
+        bad_paths=["wiki/topics/资产配置入门.md", "wiki/sources/10-四个木.md"],
+    ).json()
+
+    assert created["bad_paths"] == ["wiki/topics/资产配置入门.md", "wiki/sources/10-四个木.md"]
+    listed = client.get(f"/api/knowledge-bases/{kb['id']}/feedback").json()["items"][0]
+    assert listed["bad_paths"] == created["bad_paths"]
+
+
+def test_bad_paths_default_to_empty_and_deduplicate(client: TestClient):
+    kb = create_kb(client)
+
+    assert rate(client, kb["id"], rating=-1).json()["bad_paths"] == []
+    assert rate(client, kb["id"], rating=-1, bad_paths=["a.md", "a.md", "  "]).json()["bad_paths"] == ["a.md"]
+
+
+def test_a_thumbs_up_cannot_mark_a_citation_as_wrong(client: TestClient):
+    """Silently dropping the field would leave the caller believing it was recorded."""
+    kb = create_kb(client)
+
+    response = rate(client, kb["id"], rating=1, bad_paths=["wiki/topics/资产配置入门.md"])
+
+    assert response.status_code == 422
+    assert "wrong" in response.text

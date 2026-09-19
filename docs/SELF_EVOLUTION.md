@@ -53,15 +53,16 @@ anything.
                        ▼
               record the signal
        query, answer, strategy_id, hops, vectors,
-       planned, the cited pages, the rating
+       planned, the cited pages, the rating,
+       the citations flagged as wrong
                        │
                        ▼
               replay: run the recorded questions
               through every strategy and diff
        ┌───────────────┴────────────────┐
        ▼                                ▼
-  👍 cases: are the cited          👎 cases: did the result
-  pages still retrieved?           actually change?
+  👍 cases: are the cited          👎 cases: are the flagged
+  pages still retrieved?           citations still retrieved?
        │                                │
        └───────────────┬────────────────┘
                        ▼
@@ -75,12 +76,18 @@ anything.
 1. **Signal** — `query_feedback` (SQLite). Append-only, so a change of mind is data too. It
    stores the retrieval configuration alongside the rating: `strategy_id`, plus the answer's
    `hops`, `vectors` and `planned` from the response. Without those, a 👍 could not be
-   attributed to a configuration.
+   attributed to a configuration. A thumbs down can also name **which citations were wrong**
+   (`bad_paths`), which sharpens the judgement from "was this set of evidence any good" to
+   "which piece of it misled the answer" — the closest thing to a page-level signal here, and
+   still a person's judgement at one moment rather than a gold label.
 2. **Memory** — the strategy set in `app/services/retrieval_strategy.py` plus the
    configuration knobs in `docs/RETRIEVAL.md`. Deliberately code, not a runtime table:
    "changing what retrieval can do" stays a reviewed change.
 3. **Replay** — `backend/scripts/replay_queries.py`. Compares strategies on recorded
-   questions, reports which liked citations survive and what each strategy costs.
+   questions and reports two things: which liked citations survive, and **whether the flagged
+   citations are still retrieved**, plus what each strategy costs. A flagged citation is
+   excluded from the "should have been kept" set, otherwise hiding it would also be counted as
+   a regression and no candidate could ever win.
 4. **Gate** — `backend/scripts/propose_strategy_change.py` writes a reviewable Markdown
    proposal, and promotion happens as a normal git change. Git is the audit log and the
    rollback mechanism at once.
@@ -111,8 +118,10 @@ any number the scripts print.
 **Can say**
 
 - A strategy lost pages that a person marked as liked. That is a regression, full stop.
-- A strategy changed the result for a question a person marked as bad. That is a candidate
-  worth a human look — not a fix.
+- A strategy stopped returning a citation a person flagged as wrong, which the default still
+  returns. That is a candidate worth a human look — not a fix. "The result changed" on its own
+  is not: reordering the list or adding a link hop changes the set without touching what was
+  wrong.
 - A strategy costs more link hops or more linked pages. That is a price.
 
 **Cannot say**
@@ -124,26 +133,31 @@ any number the scripts print.
   there, every strategy returns nothing and they all look equal.
 
 Because of that, the proposal script's default recommendation is **no change**, and it only
-proposes a promotion when a candidate keeps every liked citation *and* changes at least one
-disliked case. Even then the proposal says "worth a human look", not "merge this".
+proposes a promotion when a candidate keeps every liked citation *and* hides at least one
+citation that was flagged and that the default still returns. Even then the proposal says
+"worth a human look", not "merge this".
 
 ## Worked example (real numbers)
 
-Recorded feedback on a 25-page workspace, 6 wiki ratings (4 👍, 2 👎), replaying
-all five strategies through `propose_strategy_change.py`:
+Recorded feedback on a 25-page workspace: 7 wiki ratings (4 👍, 3 👎, one of which flagged 2
+citations as wrong), replaying all five strategies through `propose_strategy_change.py`:
 
-| Strategy | 👍 citations retained | Regressions vs default | New changes vs default | avg linked pages | avg hops |
+| Strategy | 👍 citations retained | Regressions vs default | Flagged citations hidden vs default | avg linked pages | avg hops |
 | --- | --- | --- | --- | --- | --- |
-| `auto` ← current default | 14/14 | — | — | 0.33 | 1.17 |
+| `auto` ← current default | 14/14 | — | — | 0.29 | 1.14 |
 | `local` | **12/14** | **1** | 0 | 0.00 | 1.00 |
-| `deep` | 14/14 | 0 | 0 | 0.33 | **2.00** |
-| `hybrid` | 14/14 | 0 | 0 | 0.00 | 1.17 |
-| `planned` | 14/14 | 0 | 0 | 0.00 | 1.17 |
+| `deep` | 14/14 | 0 | 0 | 0.29 | **2.00** |
+| `hybrid` | 14/14 | 0 | 0 | 0.29 | 1.14 |
+| `planned` | 14/14 | 0 | 0 | 0.29 | 1.14 |
 
 What a careful reader takes from this, and what the tool concluded:
 
-- **Keep `auto`.** No candidate changed a case the default had not already changed, so
-  promoting one would buy nothing and `deep` would double the link hops.
+- **Keep `auto`.** No candidate hid a flagged citation the default still returns, so promoting
+  one would buy nothing and `deep` would double the link hops.
+- The two citations that 👎 flagged (both about net worth) come back under **every** strategy:
+  the question shares the word 资产 with them, so a lexical match guarantees they appear. That
+  is the evidence saying *this failure is not a strategy choice* — not that it is unfixable.
+  Fixing it means changing scoring or scoping, which is a separate proposal.
 - `local` **loses a liked citation relative to the default** — link expansion is earning its
   cost, and that is now evidence rather than taste.
 - `hybrid` and `planned` look equal here because the rated questions were worded close to the
@@ -168,7 +182,7 @@ per-case detail — which is exactly why the proposal prints that detail instead
 
 | Failure | Why it happens | Countermeasure |
 | --- | --- | --- |
-| **Reward hacking** | optimisation targets a proxy (`more citations`, `cleaner lint`) instead of usefulness | replay reports *retention of liked citations* and *which* cases changed, never a single score; promotion needs a human |
+| **Reward hacking** | optimisation targets a proxy (`more citations`, `cleaner lint`) instead of usefulness | replay reports *retention of liked citations* and *whether flagged citations still come back*, never a single score; promotion needs a human |
 | **Drift** | prompts and skills get rewritten repeatedly until they are unusable | strategy set is code with tests; proposals are files under review; rollback is `git revert` |
 | **Cost explosion** | agentic retrieval with N tool calls per question | the default path loads no model; `planned` adds exactly one call; hops and neighbour counts are bounded per strategy |
 | **Non-reproducibility** | a full agentic path makes regressions hard to attribute | the deterministic core stays the default and is covered by the test suite; every response reports `strategy/hops/vectors/planned` |
@@ -192,8 +206,10 @@ per-case detail — which is exactly why the proposal prints that detail instead
 
 The natural next steps, in the order the evidence would justify them:
 
-1. **More signal per question**: let the rating carry which citation was wrong, so replay can
-   score page-level retention instead of set retention.
+1. **More signal per question**: ✅ done — a rating can name which citations were wrong
+   (`bad_paths`) and replay judges at page level. What is left is getting people to flag
+   *more* entries (most thumbs down still name nothing), and giving thumbs up a positive
+   signal too ("this is the citation that mattered").
 2. **A frozen evaluation set**: promote the most-discussed recorded questions into
    hand-labelled cases, which turns the diff tool into a real scorer for those cases.
 3. **Knowledge-axis evolution**: drive work from lint and graph gaps into a research step

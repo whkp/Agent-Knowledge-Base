@@ -295,6 +295,7 @@ strategies**, so each record keeps enough information to replay the query later:
 | `answer_mode` / `model` | whether this answer was a deterministic template or model synthesis, and which model |
 | `strategy_id` | which retrieval strategy produced this answer, so replays can compare |
 | `source_paths` | the cited page paths shown at the time, or `document:<id>#<chunk>` fragments |
+| `bad_paths` | on a thumbs down, **which of those citations were wrong** (a subset of `source_paths`); sending it with a thumbs up is rejected rather than silently dropped |
 
 Storage and boundaries:
 
@@ -306,6 +307,14 @@ Storage and boundaries:
 - `GET .../feedback` reads the signal back and returns `positive` / `negative` totals. The
   workbench writes ratings with the strategy that produced the answer, and MCP exposes the
   read side as `list_answer_feedback`; see sections 5.7 and 5.8 for what consumes it.
+- The workbench has two surfaces for this: under the answer (useful / not useful, an optional
+  reason, and a "which citation was wrong" picker) and a **feedback sheet** (ratings in reverse
+  chronological order, 👍/👎 totals, the flagged citations, and a way to put the question back
+  into the composer and re-run it). Neither writes to the wiki, and the feedback sheet is
+  read-only.
+- `bad_paths` moves replay from a **set-level** judgement ("is the evidence still retrievable")
+  to a **page-level** one ("is the citation that person called wrong still retrievable"). It is
+  still not a gold label: "hid a flagged citation" must never be phrased as "got it right".
 
 ### 5.6 Retrieval strategies
 
