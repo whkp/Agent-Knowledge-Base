@@ -36,12 +36,12 @@ The Markdown workspace is the long-lived source of truth. SQLite preserves appli
 - React workbench for browsing and editing Markdown pages.
 - Three workbench surfaces over the same workspace: the page itself, the link graph derived from `[[wikilinks]]`, and a wiki health check that can create a page for a broken link.
 - Optional OpenAI-compatible synthesis for page and raw-source queries, with citations and deterministic fallback.
-- Page queries that follow `[[wikilinks]]` one hop beyond the direct matches, marking those pages `related`.
+- Page queries that follow `[[wikilinks]]` beyond the direct matches — one hop, or two when the direct matches are weak — marking those pages `related`.
 - Wiki lint for broken links, orphan pages, and missing summaries.
 - Retrieval that is scored with CJK bigrams and BM25, follows wiki links adaptively, and can add page-level vector recall through named strategies (`auto`, `local`, `deep`, `hybrid`, `planned`) chosen per query.
 - A replay tool that compares those strategies against recorded 👍/👎 feedback, and a proposal script that turns that comparison into a reviewable `proposals/*.md` file. Changing a default is a git change, not a runtime toggle.
 - A thumbs up or thumbs down on every answer, with an optional reason when a thumbs down is recorded. Ratings are business data in SQLite and never enter the wiki.
-- MCP tools for source ingestion, page browsing, retrieval-first querying, status, linting, and explicit optional synthesis.
+- MCP tools for source ingestion, page browsing, retrieval-first querying through named strategies, status, linting, answer feedback, and explicit optional synthesis.
 - Optional ChromaDB and multilingual embedding retrieval for both ordinary documents and traceable external source snapshots.
 
 Current product screenshots are kept under `demo/` and show the workbench, page-first querying with citations, the derived link graph, and the optional raw-source RAG mode.
@@ -81,8 +81,11 @@ Raw-source RAG stays available when an answer needs the underlying material rath
 backend/       FastAPI API service
 frontend/      React + Vite + TypeScript workbench
 mcp-server/    MCP adapter for AI agents
-docs/          Installation and project design notes
+docs/          Design, retrieval and installation references (each in English and Chinese)
+skills/        Agent skills that operate the Backend through its APIs
+proposals/     Reviewable retrieval-strategy proposals produced from recorded feedback
 AGENTS.md      Development guide for contributors and coding agents
+TODO.md        The working plan: what is next, why, and how to verify it
 ```
 
 Documentation is split by purpose:
@@ -95,6 +98,7 @@ Documentation is split by purpose:
 | Local installation | [中文](docs/LOCAL_INSTALLATION.md) · [English](docs/LOCAL_INSTALLATION_EN.md) | deployment, MCP client configuration, troubleshooting |
 | Methodology | [llm-wiki.md](llm-wiki.md) | the Markdown-first concept this project implements |
 | Agent skill | [skills/agentkb-retrieval](skills/agentkb-retrieval/SKILL.md) | the same loop, written as a procedure an external agent can follow |
+| Plan · 中文 | [TODO.md](TODO.md) | what is next, why, how to verify it, and what the project deliberately does not build |
 
 ## Quick Start
 
@@ -254,14 +258,15 @@ See [docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md) for the full local 
 
 ## Roadmap
 
-The next steps, roughly in order of value per unit of work:
+[`TODO.md`](TODO.md) is the working plan and the single source of truth for what comes next.
+Its headline items today:
 
-1. Break the current O(n²) graph layout for large workspaces: fewer iterations with a Barnes-Hut approximation, or layout in a Web Worker.
-2. Segment CJK queries/tokens instead of substring matching, so page-first retrieval stops missing synonyms.
-3. Move ingest into a background queue with progress, retry, and content-hash deduplication; ingestion currently blocks the request and re-ingesting an unchanged source adds a second record.
-4. Add content-level lint: contradictions, claims superseded by newer sources, and concepts mentioned without their own page.
-5. Extract a standalone `wiki-core` package for the workspace format and Markdown operations, and add reviewable page proposals plus streaming synthesis.
-6. Add conflict detection, Git sync, more provider adapters, and stabilize the workspace format as version 1.
+1. Let a rating name *which* citation was wrong, so replay can judge page-level retention instead of set retention.
+2. Break the O(n²) graph layout: measured at 1.8s to open the graph for 800 pages.
+3. Move ingest into a background queue with progress and content-hash deduplication; today it blocks the request and re-ingesting an unchanged source adds a record.
+
+The file also records what the project deliberately does not build, and why — starting with
+an agent inside the backend.
 
 ## Project Status And Naming
 

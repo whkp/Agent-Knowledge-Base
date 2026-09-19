@@ -20,7 +20,7 @@
 - 检索打分必须与查询长度无关（使用 BM25 与覆盖率，而不是裸词频），语义检索必须有相似度下限；embedding 或模型不可用时必须确定性退回，并如实报告实际用了什么。
 - lint 至少检查断链、孤立页和缺少摘要；不要修改 `.obsidian/` 或其他第三方元数据。
 
-如果本文件的阶段计划不足以判断产品边界、接口细节、演示路径或验收口径，优先参考根目录 `README.md`、`docs/ARCHITECTURE.md` 和 `docs/LOCAL_INSTALLATION.md`。阶段 0 至 7 是历史 MVP 交付记录；当前实现契约以架构文档和测试为准。
+如果本文件的阶段计划不足以判断产品边界、接口细节、演示路径或验收口径，优先参考根目录 `README.md`、`docs/ARCHITECTURE.md` 和 `docs/LOCAL_INSTALLATION.md`。阶段 0 至 7 是历史 MVP 交付记录；当前实现契约以架构文档和测试为准。接下来要做的事、优先级与验收标准记在根目录 `TODO.md`，动检索相关的改动前先读它和 `docs/SELF_EVOLUTION_CN.md`。
 
 项目后续演进有两条主线：
 - RAG 应用：Backend 已支持通过 OpenAI-compatible 接口，将检索 chunks 或 wiki 页面综合成带引用依据的回答；后续将补齐模型生成流式输出和更多 Provider 原生适配。
