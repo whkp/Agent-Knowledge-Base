@@ -1,29 +1,50 @@
 # AGENTS.md
 
-本文件是 `kk-knowledge-agent` 的开发导航，供 Codex/Agent 在后续任务中优先读取。项目目标是构建轻量级知识库系统：Backend 负责知识库、文档、分块、向量化与检索；Frontend 提供演示页面；MCP Server 将检索能力封装为 Agent 工具。
+本文件是 `AgentKB` 的开发导航，供 Codex/Agent 在后续任务中优先读取。项目目标是构建面向 AI Agent 的 Markdown-first 知识库系统：Backend 负责知识库、来源摄取、wiki 文件维护、分块、向量化与检索；Frontend 提供 AgentKB 工作台；MCP Server 将同一套知识库工作流暴露为 Agent 工具。
 
-如果本文件的阶段计划不足以判断产品边界、接口细节、演示路径或验收口径，优先参考 `docs/PROJECT_HANDOFF.md`。
+## Wiki-first 约束
+
+- 每个知识库都有独立工作区：`data/wiki/kb-<id>/`。
+- `raw/` 是不可变来源快照；`wiki/` 是可维护页面；`index.md` 是内容索引；`log.md` 是 append-only 活动记录。
+- 外部来源快照必须保留原文正文、来源 URL、平台、作者、抓取时间、保存策略和内容哈希；完整第三方正文只能进入被 Git 忽略的运行时目录。
+- `full_text`、`excerpt`、`link_only` 必须如实标记；不能用已有摘要补写或伪造不可访问来源的原文。
+- Markdown wiki 是长期事实载体，SQLite 是业务兼容索引，Chroma 是可选的检索加速层。
+- 页面之间使用 `[[path/without-extension]]` 建立链接；图谱只能从页面链接派生，不能成为独立事实来源。
+- 摄取来源必须同时维护 raw 来源页、主题页、索引和日志；查询可以把有价值的回答保存到 `wiki/queries/`。
+- 主题页的归属与来源关系是确定性逻辑：**没有模型时**只有标题完全相同或两个独立标题词命中才并入已有主题页，`sources:` front matter 与 `## Sources` 列表由代码维护，模型只能改 `## Evolving synthesis` 段；**有模型时**模型从候选主题页中选定归属，但只能选择候选项或新建，不能创建/重命名文件。
+- 模型相关的主题维护必须发生在数据库事务提交之后，且失败只记日志，不得回滚已提交的摄取。
+- 模型失败或不启用时摄取仍要产出可用的来源页与来源列表。
+- 页面查询命中后可以沿 `[[链接]]` 扩展一跳补充证据，扩展结果必须标记 `related=true`，且不得改变直接命中的排序；确定性回答与结晶页面只使用直接命中。
+- lint 至少检查断链、孤立页和缺少摘要；不要修改 `.obsidian/` 或其他第三方元数据。
+
+如果本文件的阶段计划不足以判断产品边界、接口细节、演示路径或验收口径，优先参考根目录 `README.md`、`docs/ARCHITECTURE.md` 和 `docs/LOCAL_INSTALLATION.md`。阶段 0 至 7 是历史 MVP 交付记录；当前实现契约以架构文档和测试为准。
 
 项目后续演进有两条主线：
-- RAG 应用：Backend 检索 chunks 后接入 LLM，生成带引用依据的回答；此时流式接口主要用于逐步返回 LLM 生成内容。
-- MCP 外接知识库：MCP Server 将 Backend 检索能力暴露为 Agent 工具，Codex/Claude Code/OpenClaw 等 Agent 可调用外部知识库补充上下文。
+- RAG 应用：Backend 已支持通过 OpenAI-compatible 接口，将检索 chunks 或 wiki 页面综合成带引用依据的回答；后续将补齐模型生成流式输出和更多 Provider 原生适配。
+- MCP 外接知识库：MCP Server 将 Backend 检索能力暴露为 Agent 工具。`query_wiki` 和 `search_knowledge_base` 必须强制 `llm.enabled=false`，由 Codex/Claude Code/OpenClaw 等调用方 Agent 完成最终推理；仅 `synthesize_knowledge` 可显式请求 Backend 模型综合。
 
 ## 全局原则
 
-- Backend 是唯一业务核心，Frontend 和 MCP Server 不重复实现检索逻辑。
+- Backend 是唯一业务核心，Frontend 和 MCP Server 不重复实现 wiki、检索或文件维护逻辑。
 - SQLite 保存业务数据，ChromaDB 保存 chunk embedding。
 - 删除知识库或文档时，必须同步删除对应 Chroma 向量。
+- 外部来源删除时，必须同步删除 SQLite 记录、raw Markdown 快照、Wiki 来源关系和 Chroma 向量。
 - 同一个 Backend 检索核心要同时服务普通用户路径和 Agent 工具路径。
 - 优先交付可演示 MVP，再补测试和部署优化项。
 - 中文语义检索默认使用 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`。
 - API 错误必须清晰：空 query、知识库不存在、空文档、非 txt、文件过大、embedding/向量库/检索失败。
+- `POST /api/knowledge-bases/{id}/documents/source-snapshot` 必须复用普通摄取流程，并将来源元数据透传到 Chroma 和 RAG `SearchResult`。
+- OpenAI-compatible 模型综合是可选能力：默认不开启，模型失败必须保留页面回答或检索结果，且不得将 API Key 写入 Markdown、SQLite、日志或 API 响应。
+- 模型有效配置优先级为单次请求覆盖 > Backend 进程运行时配置 > `.env`/环境变量 > 默认值；网页配置只保存于 Backend 进程内存，重启后失效。
+- MCP 基础检索工具必须传入单次请求覆盖 `{"enabled": false}`，不得继承网页或 `.env` 的模型启用状态；MCP 模型综合必须是名称和参数都明确的独立工具，且不接收 API Key。MCP 的摄取工具必须传 `synthesize_topic=false`，不得隐式触发主题页改写。
+- `POST /api/search/stream` 仍是仅检索的兼容 SSE 契约。不要把模型 token 直接塞入旧事件格式；新增流式模型回答前必须先设计并记录新的事件契约。
 
 ## 阶段 0：仓库与环境
 
 目标：让项目结构稳定，后续任务能直接进入开发。
 
 交付：
-- `backend/`、`frontend/`、`mcp-server/`、`examples/` 基础目录。
+- `backend/`、`frontend/`、`mcp-server/` 基础目录。
 - `.gitignore`、`README.md`。
 - Backend 和 MCP 的 `.env.example`。
 - Frontend 的 Vite/React/TypeScript 配置文件。
@@ -190,7 +211,7 @@ MCP 测试：
 
 文档：
 - README 增加启动方式、API 示例、MCP 配置、面试演示流程、后续优化方向。
-- 后续优化必须保留两条方向：接入 LLM 做 RAG 流式回答；封装 MCP Server 做 Agent 外接知识库。
+- 后续优化必须保留两条方向：升级 LLM RAG 为流式回答；封装 MCP Server 做 Agent 外接知识库。
 
 MVP 验收标准：
 - 可以创建、查询、更新、删除知识库。

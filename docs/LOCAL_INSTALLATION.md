@@ -1,12 +1,16 @@
 # 本地安装部署指南
 
-本文档用于在本机安装并运行 `kk-knowledge-agent`，包含：
+本文档用于在本机安装并运行 `AgentKB`，包含：
 
 - 本地知识库服务安装：Backend + Frontend
 - MCP Server 安装：供 Codex、Claude Code 等 Agent 调用外接知识库
 - 基础验证与常见问题
 
 当前项目暂不使用 Docker；Docker Compose 仅作为后续优化方向保留。
+
+当前工作台以 Markdown wiki 为主线：每个知识库都会在 `WIKI_ROOT_DIR` 下创建独立的 `kb-<id>/` 工作区，包含 `raw/`、`wiki/`、`index.md` 和 `log.md`。SQLite/Chroma 仍用于兼容旧文档与向量搜索路径。
+
+安装命令之外的架构、查询模式、模型配置优先级、密钥边界和 API 契约请参阅 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 1. 环境要求
 
@@ -29,13 +33,15 @@ Frontend: React + Vite + TypeScript
 MCP Server: Python MCP SDK
 ```
 
-首次安装完整后端依赖时会下载 PyTorch、ChromaDB、sentence-transformers 及 embedding 模型，耗时较长是正常的。
+首次安装完整后端依赖时会下载 PyTorch、ChromaDB、sentence-transformers 及 embedding 模型，耗时较长是正常的。模型成功下载后会使用本地缓存；如果 Hugging Face 临时不可用或限流，AgentKB 会自动尝试从该缓存加载模型。
+
+当前工作区使用 AgentKB 的存储命名：数据库为 `data/agentkb.db`，Chroma 集合为 `agentkb_chunks`。`data/`、`WIKI_ROOT_DIR` 和 Chroma 数据属于本地运行时文件，不应提交到 Git；其中 `raw/sources/` 和 `documents.content` 会保留可用于 RAG 的来源正文。
 
 ## 2. 克隆项目
 
 ```bash
-git clone https://github.com/kanna12580/kk-knowledge-agent.git
-cd kk-knowledge-agent
+git clone https://github.com/kanna12580/agentkb.git
+cd agentkb
 ```
 
 如果已经在本地仓库中：
@@ -104,13 +110,80 @@ cp .env.example .env
 默认 `.env.example` 内容已经适合本地开发：
 
 ```text
-DATABASE_URL=sqlite:///./data/kk_knowledge.db
+APP_NAME=AgentKB API
+DATABASE_URL=sqlite:///./data/agentkb.db
 CHROMA_PERSIST_DIR=./chroma
-CHROMA_COLLECTION_NAME=kk_knowledge_chunks
+CHROMA_COLLECTION_NAME=agentkb_chunks
 EMBEDDING_MODEL_NAME=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 VECTOR_INDEX_ENABLED=true
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
+
+### 可选：通过 `.env` 配置大模型
+
+AgentKB 默认不调用生成式模型。启用后，页面优先和原始资料 RAG 都会先检索，再把命中的内容作为受限上下文交给模型生成带 `[1]`、`[2]` 引用的回答。
+
+接口遵循 OpenAI-compatible Chat Completions 协议：`POST {LLM_BASE_URL}/chat/completions`。可以接入 OpenAI、兼容网关、vLLM、LM Studio、Ollama 的 OpenAI-compatible 端点或其他兼容服务。
+
+在 `backend/.env` 中加入：
+
+```dotenv
+LLM_ENABLED=true
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=your-api-key
+LLM_MODEL=gpt-4o-mini
+LLM_TEMPERATURE=0.2
+LLM_MAX_TOKENS=1200
+LLM_TIMEOUT_SECONDS=60
+# 输入给模型的检索上下文最大字符数
+LLM_CONTEXT_MAX_CHARS=12000
+```
+
+`LLM_BASE_URL` 应填写 API 根路径，通常以 `/v1` 结尾，不要包含 `/chat/completions`。例如本地服务可使用 `http://127.0.0.1:1234/v1` 或服务实际暴露的兼容 API 根路径。配置改动后重启 Backend 生效。
+
+未设置 `LLM_ENABLED=true` 时，系统继续使用本地页面排序和向量召回，不会发生模型调用，也不会产生模型费用。
+
+### 导入外部来源全文
+
+外部平台正文的采集与服务端解耦。可以用本地已登录的只读采集工具取得 JSON/JSONL，再导入当前知识库：
+
+```bash
+cd backend
+PYTHONPATH=. python scripts/import_source_snapshots.py \
+  --knowledge-base-id 1 \
+  --input /absolute/path/to/source-snapshots.json
+```
+
+导入器支持 JSON 数组和 JSONL，字段示例：
+
+```json
+{
+  "title": "来源标题",
+  "content": "采集到的完整正文",
+  "source_url": "https://x.com/example/status/123",
+  "platform": "x",
+  "author": "作者显示名",
+  "account": "账号",
+  "published_at": "2026-08-17T08:00:00Z",
+  "source_policy": "full_text",
+  "disclosures": ["公开社交内容，仅作研究与检索，不构成投资建议"],
+  "tags": ["research"]
+}
+```
+
+`full_text` 会同时写入 SQLite 原文、`WIKI_ROOT_DIR/kb-<id>/raw/sources/` 和 Chroma 分块；`excerpt` 与 `link_only` 会被保留策略标记，后者不应作为原文 RAG 依据。重复执行时，URL 和内容哈希相同的记录会跳过。完整第三方正文只放在本地运行时目录，不进入公开仓库。
+
+### 网页端临时配置
+
+工作台右上角的“配置模型”可在不改文件、不重启 Backend 的情况下设置服务地址、模型、温度、输出长度、超时和 API Key，并可先测试连接。该设置通过以下本地 API 生效：
+
+```text
+GET /api/llm/config    # 返回有效配置状态，不返回 API Key
+PUT /api/llm/config    # 只保存到当前 Backend 进程内存
+POST /api/llm/test     # 用填入的配置请求一次模型，验证连通性
+```
+
+网页端 API Key 只用于当前 Backend 进程：不会写入 Markdown、SQLite 或浏览器存储；Backend 重启后会丢失，并回退到 `.env` 配置。面向外网部署时，应使用 HTTPS、认证和服务器端 `.env` 管理密钥，不应把 API Key 填入公开网页；当前项目默认面向受信任的本地工作台使用。
 
 启动后端：
 
@@ -147,7 +220,28 @@ http://127.0.0.1:8000/health
 python backend/scripts/validate_real_backend.py
 ```
 
-预期结果：
+默认存储标识：
+
+```text
+数据库：data/agentkb.db
+Chroma 集合：agentkb_chunks
+```
+
+如果从旧版本迁移本地数据，可以在项目根目录执行：
+
+```bash
+python backend/scripts/migrate_storage_names.py
+```
+
+先查看迁移目标而不执行：
+
+```bash
+python backend/scripts/migrate_storage_names.py --dry-run
+```
+
+旧 Chroma 数据不会自动重命名集合。建议使用新集合名重新建立索引；如需暂时读取旧集合，可在 `.env` 中临时设置 `CHROMA_COLLECTION_NAME=livingwiki_chunks` 或 `CHROMA_COLLECTION_NAME=kk_knowledge_chunks`，完成迁移后再切回 `agentkb_chunks`。
+
+预期检索结果：
 
 ```text
 春天 -> 春
@@ -188,13 +282,12 @@ http://localhost:5173
 前端 Demo 支持：
 
 ```text
-1. 创建知识库
-2. 删除知识库
-3. 上传文本
-4. 上传 txt 文件
-5. 删除文档
-6. 普通语义搜索
-7. 流式结果展示
+1. 创建知识库和 Markdown 工作区
+2. 摄取文本或 txt 来源，生成 raw 快照、来源页、主题页和 index
+3. 浏览、编辑和保存 wiki Markdown 页面
+4. 基于 wiki 页面查询，并把回答结晶到 `wiki/queries/`
+5. 运行 lint 健康检查和查看派生图谱
+6. 可选：在“配置模型”中接入 OpenAI-compatible 服务，再次查询并检查带引用的模型综合回答
 ```
 
 构建检查：
@@ -212,13 +305,11 @@ npm run build
 2. 启动 Frontend
 3. 打开 http://localhost:5173
 4. 创建知识库：现代文学
-5. 上传文本《春》
-6. 上传文本《故乡》
-7. 搜索：春天
-8. 搜索：少年闰土
-9. 使用流式搜索：小孩子
-10. 删除测试文档
-11. 删除测试知识库
+5. 摄取文本《春》和《故乡》
+6. 在页面目录中打开来源页和主题页
+7. 查询：少年闰土，并选择“结晶到 wiki”
+8. 运行 lint，查看断链和孤立页面
+9. 打开 Wiki graph 查看页面链接派生的结构
 ```
 
 注意：
@@ -226,6 +317,7 @@ npm run build
 - 上传文档时会触发 embedding 和 Chroma 写入。
 - 第一次向量化可能较慢。
 - 删除知识库/文档时，Backend 会同步删除对应 Chroma 向量。
+- 原始素材保存在 `raw/`，系统不会用 wiki 摘要覆盖原始来源。
 
 ## 7. MCP Server 安装
 
@@ -301,6 +393,13 @@ MCP Server 提供工具：
 search_knowledge_base
 list_knowledge_bases
 add_text_document
+add_source_to_wiki
+get_wiki_status
+list_wiki_pages
+read_wiki_page
+query_wiki
+synthesize_knowledge
+lint_wiki
 ```
 
 工具职责：
@@ -309,7 +408,7 @@ add_text_document
 search_knowledge_base:
   输入 query、knowledge_base_id、top_k
   调用 Backend /api/search
-  返回语义检索结果
+  强制 llm.enabled=false，返回原始资料向量检索结果，不会因网页端或 .env 启用了模型而额外调用 LLM
 
 list_knowledge_bases:
   调用 Backend /api/knowledge-bases
@@ -318,6 +417,25 @@ list_knowledge_bases:
 add_text_document:
   调用 Backend /api/knowledge-bases/{id}/documents/text
   添加文本知识
+
+add_source_to_wiki:
+  调用 Backend 文本摄取接口
+  同时维护 raw 快照、来源页、主题页、索引和活动日志
+
+get_wiki_status / list_wiki_pages / read_wiki_page:
+  读取知识库工作区状态和 Markdown 页面
+
+query_wiki:
+  调用 Backend wiki 查询接口
+  强制 llm.enabled=false，返回页面优先的确定性回答和引用页面，不会因网页端或 .env 启用了模型而额外调用 LLM
+
+synthesize_knowledge:
+  显式请求 AgentKB Backend 已配置的模型综合
+  参数 source_mode=wiki 使用维护的 Markdown 页面；source_mode=rag 使用原始资料向量检索
+  不接收 API Key 或 Provider 配置；模型不可用时保留本地回退结果和 model_error
+
+lint_wiki:
+  检查断链、孤立页和缺少摘要
 ```
 
 ## 9. MCP 客户端配置示例
@@ -331,10 +449,10 @@ add_text_document:
 ```json
 {
   "mcpServers": {
-    "kk-knowledge": {
+    "agentkb": {
       "command": "python",
       "args": [
-        "C:/Users/16327/Documents/kk knowledge agent skill/mcp-server/server.py"
+        "/path/to/agentkb/mcp-server/server.py"
       ],
       "env": {
         "BACKEND_API_URL": "http://127.0.0.1:8000",
@@ -350,7 +468,7 @@ add_text_document:
 ```json
 {
   "mcpServers": {
-    "kk-knowledge": {
+    "agentkb": {
       "command": "python",
       "args": ["mcp-server/server.py"]
     }
@@ -386,6 +504,19 @@ search_knowledge_base(
 }
 ```
 
+在外部 Agent 中，推荐先调用 `query_wiki` 或 `search_knowledge_base`，由该 Agent 的主模型结合当前任务上下文完成最终回答。两项基础工具默认且强制不调用 AgentKB LLM，因此不会产生双模型串联。
+
+只有明确需要 AgentKB 基于自身配置模型生成带引用的独立回答时，再调用：
+
+```text
+synthesize_knowledge(
+  knowledge_base_id=1,
+  query="总结春天与花草的关系，并标注来源",
+  source_mode="wiki",
+  top_k=8
+)
+```
+
 ## 11. 测试
 
 在仓库根目录运行完整测试：
@@ -403,6 +534,8 @@ Backend chunk 切分
 Backend embedding/Chroma 编排
 Backend 普通搜索和流式搜索
 MCP 工具正常与错误路径
+Backend Wiki 工作区、页面查询、lint 和图谱
+Backend OpenAI-compatible 模型配置、模型综合与本地回退
 ```
 
 前端构建测试：
@@ -500,60 +633,42 @@ BACKEND_TIMEOUT_SECONDS=30
 后续重点优化：
 
 ```text
-1. 接入 LLM 做真正 RAG 回答
-2. 将当前流式搜索升级为流式回答生成
+1. 将当前 OpenAI-compatible 模型综合升级为流式回答生成
+2. 增加更多 Provider 原生适配与模型管理
 3. 增加 PDF/DOCX 上传
 4. 增加 BM25 + 向量混合检索
 5. 增加 rerank
 6. 增加 Docker Compose 一键部署
 ```
 
-## 14. Codex MCP Local Install Note
+## 14. Codex MCP 配置示例
 
-Codex MCP config path on this machine:
-
-```text
-C:\Users\16327\.codex\config.toml
-```
-
-Installed server config:
+Codex 配置文件的位置取决于操作系统和安装方式。配置项可以使用 `agentkb` 作为 MCP server id：
 
 ```toml
-[mcp_servers.kk_knowledge]
-command = 'C:\Users\16327\AppData\Local\Programs\Python\Python312\python.exe'
-args = ['C:\Users\16327\Documents\kk knowledge agent skill\mcp-server\server.py']
+[mcp_servers.agentkb]
+command = 'python'
+args = ['/path/to/agentkb/mcp-server/server.py']
 startup_timeout_sec = 120
 
-[mcp_servers.kk_knowledge.env]
+[mcp_servers.agentkb.env]
 BACKEND_API_URL = 'http://127.0.0.1:8000'
-BACKEND_TIMEOUT_SECONDS = '30'
+BACKEND_TIMEOUT_SECONDS = '10'
 ```
 
-Validation notes:
+验证要点：
 
 ```text
-1. Backend must be running at http://127.0.0.1:8000 before Codex calls the MCP tools.
-2. Codex CLI recognizes kk_knowledge via `codex mcp list`.
-3. A new Codex process can see the tool and starts `kk_knowledge/list_knowledge_bases`.
-4. Non-interactive `codex exec` may cancel MCP tool calls because no user approval UI is available.
-5. Restart Codex Desktop or open a new session, then approve the MCP tool call to complete live querying.
-6. The Python command must point to the interpreter with the `mcp` SDK installed. This machine uses Python312.
+1. 调用 MCP 工具前，Backend 必须运行在 http://127.0.0.1:8000。
+2. 使用 `codex mcp list` 检查 `agentkb` 是否已加载。
+3. Python 命令必须指向安装了 `mcp` SDK 的解释器。
+4. 修改 MCP Server 代码或配置后，需要重启 Codex 或重新建立 MCP 会话。
 ```
 
-Live validation result after restart:
+本地调用注意事项：
 
 ```text
-Tool: mcp__kk_knowledge.search_knowledge_base
-Input: knowledge_base_id=2, query=Codex MCP 查询知识库, top_k=3
-Result title: MCP 验证文档
-Result score: 0.6619
-```
-
-Important local-call notes:
-
-```text
-1. If MCP returns Bad Gateway but Backend /api/search works directly, check whether the MCP HTTP client is using proxy environment variables.
-2. The project sets httpx.AsyncClient(..., trust_env=False) in mcp-server/tools.py so local Backend calls do not go through system/Codex proxy settings.
-3. After changing MCP Server code or config, restart Codex Desktop or open a fresh session; already running MCP child processes do not hot reload code changes.
-4. Prefer BACKEND_API_URL=http://127.0.0.1:8000 instead of localhost to avoid local name resolution differences.
+1. 如果 MCP 返回 Bad Gateway 但 Backend /api/search 直接访问正常，检查本地 HTTP client 是否继承了代理环境变量。
+2. AgentKB MCP 已在 `mcp-server/tools.py` 中设置 `trust_env=False`，本地 Backend 请求不会经过系统代理。
+3. 建议使用 `BACKEND_API_URL=http://127.0.0.1:8000`，避免 localhost 解析差异。
 ```
