@@ -132,6 +132,29 @@ async def read_wiki_page(knowledge_base_id: int, path: str) -> dict[str, Any]:
     return response
 
 
+async def list_answer_feedback(knowledge_base_id: int, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    """Read the recorded 👍/👎 ratings and their running totals.
+
+    This is the only signal AgentKB has about whether retrieval worked, and it is produced
+    by a person rating an answer in the workbench — never by a model. Each row carries the
+    retrieval configuration that produced the answer, so a rating can be attributed.
+    """
+    if knowledge_base_id <= 0:
+        return _error("knowledge_base_id must be greater than 0.")
+    if page <= 0:
+        return _error("page must be greater than 0.")
+    if page_size <= 0:
+        return _error("page_size must be greater than 0.")
+    response = await _request(
+        "GET",
+        f"/api/knowledge-bases/{knowledge_base_id}/feedback",
+        params={"page": page, "page_size": page_size},
+    )
+    if "error" in response:
+        return _error(response["error"])
+    return response
+
+
 async def search_with_strategy(knowledge_base_id: int, query: str, strategy: str, top_k: int = 8) -> dict[str, Any]:
     """Retrieve wiki pages through a named retrieval strategy.
 

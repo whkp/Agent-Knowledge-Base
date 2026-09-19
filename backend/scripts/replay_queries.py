@@ -71,6 +71,7 @@ def replay(row: QueryFeedback, strategy_id: str, top_k: int) -> dict:
     retrieved = [item.path for item in response.results]
     recorded = [path for path in row.source_paths if path.endswith(".md")]
     kept = [path for path in recorded if path in retrieved]
+    top = retrieved[0] if retrieved else None
     return {
         "query": row.query,
         "rating": row.rating,
@@ -80,9 +81,20 @@ def replay(row: QueryFeedback, strategy_id: str, top_k: int) -> dict:
         "related": len([item for item in response.results if item.related]),
         "recorded": len(recorded),
         "kept": len(kept),
-        "changed": sorted(set(retrieved) - set(recorded)) != [] or len(kept) != len(recorded),
-        "top": retrieved[0] if retrieved else None,
+        # "Changed" means the top piece of evidence changed, which is what a reader would
+        # notice. Comparing whole result sets flags almost everything once recall improves,
+        # and would let a strategy that only added a hop look like an improvement.
+        "changed": top_changed(recorded, top),
+        "top": top,
+        "recorded_top": recorded[0] if recorded else None,
     }
+
+
+def top_changed(recorded: list[str], top: str | None) -> bool:
+    """Whether the leading citation differs from the one that was rated."""
+    if not recorded or top is None:
+        return False
+    return top != recorded[0]
 
 
 def summarise(rows: list[dict]) -> dict:

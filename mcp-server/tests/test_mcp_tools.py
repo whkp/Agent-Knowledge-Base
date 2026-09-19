@@ -31,7 +31,12 @@ class FakeAsyncClient:
     async def request(self, method: str, path: str, **kwargs):
         assert self.transport is not None
         assert self.last_trust_env is False
-        request = httpx.Request(method, f"http://backend.test{path}", json=kwargs.get("json"))
+        request = httpx.Request(
+            method,
+            f"http://backend.test{path}",
+            params=kwargs.get("params"),
+            json=kwargs.get("json"),
+        )
         return await self.transport.handle_async_request(request)
 
 
@@ -247,3 +252,75 @@ async def test_read_wiki_page_rejects_empty_path():
     result = await tools.read_wiki_page(1, "  ")
 
     assert result["error"] == "path cannot be empty."
+
+
+@pytest.mark.anyio
+async def test_list_answer_feedback_reads_the_signal_with_totals():
+    """The Agent must be able to see the ratings it is asked to reason about."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/api/knowledge-bases/3/feedback"
+        assert request.url.params["page_size"] == "20"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "id": 1,
+                        "knowledge_base_id": 3,
+                        "mode": "wiki",
+                        "query": "资产配置",
+                        "rating": -1,
+                        "note": "引用无关",
+                        "answer": "...",
+                        "answer_mode": "deterministic",
+                        "model": None,
+                        "strategy_id": "deep",
+                        "source_paths": ["wiki/topics/资产配置入门.md"],
+                        "created_at": "2026-09-19T00:00:00Z",
+                    }
+                ],
+                "total": 1,
+                "page": 1,
+                "page_size": 20,
+                "positive": 0,
+                "negative": 1,
+            },
+        )
+
+    set_transport(handler)
+
+    result = await tools.list_answer_feedback(knowledge_base_id=3)
+
+    assert result["total"] == 1
+    assert result["negative"] == 1
+    assert result["items"][0]["strategy_id"] == "deep", "a rating has to carry the configuration it judged"
+
+
+@pytest.mark.anyio
+async def test_list_answer_feedback_rejects_bad_arguments():
+    assert "error" in await tools.list_answer_feedback(knowledge_base_id=0)
+    assert "error" in await tools.list_answer_feedback(knowledge_base_id=1, page=0)
+    assert "error" in await tools.list_answer_feedback(knowledge_base_id=1, page_size=0)
+
+
+@pytest.mark.anyio
+async def test_search_with_strategy_sends_the_strategy_and_stays_model_free():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["strategy"] == "hybrid"
+        assert body["llm"] == {"enabled": False}, "MCP retrieval never invokes the Backend model"
+        return httpx.Response(200, json={"query": "春天", "answer": "…", "results": [], "strategy": "hybrid", "hops": 2, "vectors": True, "planned": False})
+
+    set_transport(handler)
+
+    result = await tools.search_with_strategy(knowledge_base_id=1, query="春天", strategy="hybrid")
+
+    assert result["strategy"] == "hybrid"
+    assert result["vectors"] is True
+
+
+@pytest.mark.anyio
+async def test_search_with_strategy_rejects_an_empty_strategy():
+    assert "error" in await tools.search_with_strategy(knowledge_base_id=1, query="x", strategy="   ")

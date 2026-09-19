@@ -39,7 +39,7 @@ Markdown 工作区是长期的事实载体。SQLite 保存应用元数据，Chro
 - 页面查询会沿 `[[wikilinks]]` 从命中页面再扩展一跳，并把扩展结果标记为 `related`。
 - wiki lint：断链、孤立页、缺少摘要。
 - 检索用 CJK 二元组 + BM25 打分，自适应沿链接扩展，并可通过命名策略（`auto`/`local`/`deep`/`hybrid`/`planned`）为单次查询叠加页面向量召回。
-- 回放工具能拿记录下来的 👍/👎 横向对比这些策略，让检索改动有据可依而不是靠感觉。
+- 回放工具能拿记录下来的 👍/👎 横向对比这些策略，提案脚本再把对比结果写成仓库里可评审的 `proposals/*.md`。**改默认策略是一次 git 改动，不是运行时开关。**
 - 每个回答下方可以点赞或贬低，贬低时可附原因。反馈是 SQLite 里的业务数据，绝不写入 wiki。
 - 面向来源摄取、页面浏览、检索优先查询、状态、lint 与显式可选综合的 MCP 工具。
 - 可选的 ChromaDB 与多语言 embedding 检索，同时服务于普通文档与可追溯的外部来源快照。
@@ -85,7 +85,16 @@ docs/          安装与项目设计文档
 AGENTS.md      面向贡献者与编码 Agent 的开发指南
 ```
 
-文档按用途拆分：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 定义实现设计、数据归属、模型配置优先级与查询契约；[docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md) 覆盖部署；[llm-wiki.md](llm-wiki.md) 仍是 Markdown 优先方法论的原始来源。
+文档按用途拆分：
+
+| 文档 | 内容 |
+| --- | --- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 实现设计、数据归属、模型配置优先级、查询与 API 契约 |
+| [docs/RETRIEVAL.md](docs/RETRIEVAL.md) | 问题怎么变成证据：分词、BM25 打分、向量下限、五个策略，以及怎么新增一个 |
+| [docs/SELF_EVOLUTION.md](docs/SELF_EVOLUTION.md) | 👍/👎 → 回放 → 提案 → 评审 的闭环、各步由谁负责、以及它防住了哪些失效模式 |
+| [docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md) | 部署 |
+| [llm-wiki.md](llm-wiki.md) | 本项目实现的 Markdown 优先方法论 |
+| [skills/agentkb-retrieval](skills/agentkb-retrieval/SKILL.md) | 同一条闭环，写成外部 Agent 可以照做的流程 |
 
 ## 快速开始
 

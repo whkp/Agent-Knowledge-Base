@@ -894,3 +894,82 @@ def test_vector_floor_keeps_unrelated_pages_out(client: TestClient, monkeypatch)
 
     assert above["vectors"] is True and above["results"]
     assert below["vectors"] is False and below["results"] == []
+
+
+# ---------------------------------------------------------------------------
+# Proposal tool: evidence in, reviewable Markdown out
+# ---------------------------------------------------------------------------
+
+
+def load_proposal_module():
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "propose_strategy_change.py"
+    spec = importlib.util.spec_from_file_location("propose_strategy_change", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def row(rating: int, kept: int, recorded: int, changed: bool = False, hops: int = 1) -> dict:
+    return {"query": "q", "rating": rating, "kept": kept, "recorded": recorded, "changed": changed, "hops": hops, "related": 0, "direct": 1, "top": None}
+
+
+def test_top_changed_compares_the_leading_citation_only():
+    replay = load_replay_module()
+
+    assert replay.top_changed(["a.md", "b.md"], "a.md") is False
+    assert replay.top_changed(["a.md", "b.md"], "c.md") is True
+    assert replay.top_changed([], "a.md") is False, "nothing was recorded, so nothing changed"
+
+
+def test_candidate_is_judged_against_the_default_not_the_recording():
+    """The default already changed every case here; a candidate that changes nothing new is not an improvement."""
+    proposal = load_proposal_module()
+    results = {
+        "auto": {"rows": [row(1, 4, 4), row(-1, 4, 4, changed=True)]},
+        "deep": {"rows": [row(1, 4, 4), row(-1, 4, 4, changed=True)]},
+    }
+
+    chosen, reason = proposal.recommendation("auto", results)
+
+    assert chosen == "auto"
+    assert "多付成本" in reason
+
+
+def test_a_candidate_that_loses_a_liked_citation_is_never_recommended():
+    proposal = load_proposal_module()
+    results = {
+        "auto": {"rows": [row(1, 4, 4), row(-1, 1, 4, changed=False)]},
+        "local": {"rows": [row(1, 2, 4), row(-1, 1, 4, changed=True)]},
+    }
+
+    chosen, reason = proposal.recommendation("auto", results)
+
+    assert chosen == "auto"
+    assert "保持现状" in reason
+
+
+def test_a_candidate_that_changes_a_case_the_default_left_alone_is_proposed():
+    proposal = load_proposal_module()
+    results = {
+        "auto": {"rows": [row(1, 4, 4), row(-1, 4, 4, changed=False)]},
+        "hybrid": {"rows": [row(1, 4, 4), row(-1, 4, 4, changed=True)]},
+    }
+
+    chosen, reason = proposal.recommendation("auto", results)
+
+    assert chosen == "hybrid"
+    assert "值得人工判断" in reason
+
+
+def test_proposal_lists_what_the_evidence_cannot_show():
+    proposal = load_proposal_module()
+    results = {"auto": {"rows": [row(1, 4, 4)]}, "hybrid": {"rows": [row(1, 4, 4)]}}
+
+    text = proposal.render_proposal(1, "auto", results, [], "auto", "保持现状")
+
+    assert "不能说明什么" in text
+    assert "相对当前默认策略" in text
+    assert "WIKI_QUERY_DEFAULT_STRATEGY" in text

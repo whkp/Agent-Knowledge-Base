@@ -11,6 +11,7 @@ from tools import (
     get_wiki_status,
     lint_wiki,
     list_knowledge_bases,
+    list_answer_feedback,
     list_retrieval_strategies,
     list_wiki_pages,
     query_wiki,
@@ -34,6 +35,7 @@ mcp.tool()(read_wiki_page)
 mcp.tool()(query_wiki)
 mcp.tool()(search_with_strategy)
 mcp.tool()(list_retrieval_strategies)
+mcp.tool()(list_answer_feedback)
 mcp.tool()(synthesize_knowledge)
 mcp.tool()(lint_wiki)
 

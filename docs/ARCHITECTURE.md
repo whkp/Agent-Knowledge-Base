@@ -246,6 +246,16 @@ MCP 的目标是让 Codex、Claude Code 等外部 Agent 接入可追溯知识，
 
 它**只做对比，不做打分**：没有标注答案时，任何"哪个策略更好"的结论都必须由人（或外部 Agent）看差异后判断。`--json` 输出给 Agent 消费。
 
+### 5.8 提案与晋升
+
+`backend/scripts/propose_strategy_change.py` 把回放证据写成一份可评审的 Markdown 提案，落在仓库根的 `proposals/`：
+
+- 建议**相对当前默认策略**判断：候选只有在"不丢任何 👍 引用"且"改变了默认策略没改变过的 👎 用例首条证据"时才会被提出；否则建议保持现状。拿候选和"当时的记录"比会把默认策略早就做过的改变算成候选的功劳。
+- `--check` 是给 CI/提交前用的：只回放当前默认策略，一旦它丢掉了被点赞的引用就以退出码 1 失败。
+- 晋升就是一次普通的 git 改动（改 `wiki_query_default_strategy` 或策略定义 + 测试），因此审计与回滚都是 `git log` / `git revert`。
+
+过程与理由见 [SELF_EVOLUTION.md](SELF_EVOLUTION.md)，检索机制细节见 [RETRIEVAL.md](RETRIEVAL.md)。
+
 ## 6. 模型配置
 
 ### 6.1 配置来源与优先级
