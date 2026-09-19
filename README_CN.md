@@ -12,22 +12,18 @@ AgentKB 目前是 alpha 阶段的知识库工作台。摄取、检索和结晶�
 
 ## 为什么需要 AgentKB
 
-传统 RAG 通常是这样一条路径：
-
-```text
-raw sources -> retrieve chunks -> answer -> discard
+```mermaid
+flowchart LR
+    subgraph rag ["传统 RAG"]
+        A1[原始来源] --> A2[检索分块] --> A3[回答] --> A4[丢弃]
+    end
+    subgraph agentkb ["AgentKB"]
+        B1[原始来源] --> B2[持续维护的 wiki 页面] --> B3[带引用的回答] --> B4[沉淀为一页]
+        B4 --> B2
+    end
 ```
 
-AgentKB 把有用的成果留在可持久使用的工作区里，形成两条共用同一批页面的闭环：
-
-```text
-raw source -> raw snapshot -> source page -> topic page (## Evolving synthesis)
-                                                        ^
-question -> page match -> one-hop link expansion --------+--> cited answer
-                                                                  |
-                                                                  v
-                                                        wiki/queries/ page
-```
+差别在于回答写完之后发生了什么。摄取把来源编译成持续维护的页面；查询从这些页面作答；而值得留下的回答会被归档成新的一页，于是下一次查询的起点比上一次更高。
 
 Markdown 工作区是长期的事实载体。SQLite 保存应用元数据，ChromaDB 只是可选的检索加速层，而不是知识唯一存在的地方。
 
@@ -51,25 +47,15 @@ Markdown 工作区是长期的事实载体。SQLite 保存应用元数据，Chro
 
 ## 架构
 
-```text
-AgentKB Workbench
-        |
-        | HTTP
-        v
-AgentKB API
-        |
-        +--> Markdown Wiki Workspace (durable knowledge)
-        +--> SQLite (application metadata)
-        +--> ChromaDB / embeddings (optional retrieval accelerator)
-        +--> OpenAI-compatible LLM (optional synthesis and topic maintenance)
-
-AI agents / MCP clients
-        |
-        | MCP tool calls
-        v
-AgentKB MCP
-        |
-        +------> AgentKB API
+```mermaid
+flowchart TB
+    W[React 工作台] -->|HTTP| API[AgentKB API]
+    A[AI Agent 与 MCP 客户端] -->|MCP 工具调用| MCP[AgentKB MCP]
+    MCP -->|HTTP| API
+    API --> WS[Markdown wiki 工作区 - 长期事实载体]
+    API --> DB[SQLite - 应用元数据]
+    API --> V[ChromaDB - 可选向量索引]
+    API --> L[OpenAI-compatible 模型 - 可选综合与主题维护]
 ```
 
 ## 演示

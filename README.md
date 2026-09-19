@@ -12,22 +12,18 @@ AgentKB is currently an alpha knowledge base workbench. Ingest, retrieval, and c
 
 ## Why AgentKB
 
-Traditional RAG often follows this path:
-
-```text
-raw sources -> retrieve chunks -> answer -> discard
+```mermaid
+flowchart LR
+    subgraph rag ["Traditional RAG"]
+        A1[Raw sources] --> A2[Retrieve chunks] --> A3[Answer] --> A4[Discarded]
+    end
+    subgraph agentkb ["AgentKB"]
+        B1[Raw sources] --> B2[Maintained wiki pages] --> B3[Cited answer] --> B4[Kept as a page]
+        B4 --> B2
+    end
 ```
 
-AgentKB keeps the useful result in a durable workspace, on two loops that share the same pages:
-
-```text
-raw source -> raw snapshot -> source page -> topic page (## Evolving synthesis)
-                                                        ^
-question -> page match -> one-hop link expansion --------+--> cited answer
-                                                                  |
-                                                                  v
-                                                        wiki/queries/ page
-```
+The difference is what happens after the answer is written. Ingest compiles sources into maintained pages; a query answers from those pages; and an answer worth keeping is filed back as another page, so the next query starts from more than the last one did.
 
 The Markdown workspace is the long-lived source of truth. SQLite preserves application metadata and ChromaDB is an optional retrieval accelerator, rather than the only place where knowledge exists.
 
@@ -51,25 +47,15 @@ The interactive source adapter accepts text and `.txt` files. A local JSON/JSONL
 
 ## Architecture
 
-```text
-AgentKB Workbench
-        |
-        | HTTP
-        v
-AgentKB API
-        |
-        +--> Markdown Wiki Workspace (durable knowledge)
-        +--> SQLite (application metadata)
-        +--> ChromaDB / embeddings (optional retrieval accelerator)
-        +--> OpenAI-compatible LLM (optional synthesis and topic maintenance)
-
-AI agents / MCP clients
-        |
-        | MCP tool calls
-        v
-AgentKB MCP
-        |
-        +------> AgentKB API
+```mermaid
+flowchart TB
+    W[React workbench] -->|HTTP| API[AgentKB API]
+    A[AI agents and MCP clients] -->|MCP tool calls| MCP[AgentKB MCP]
+    MCP -->|HTTP| API
+    API --> WS[Markdown wiki workspace - durable knowledge]
+    API --> DB[SQLite - application metadata]
+    API --> V[ChromaDB - optional vectors]
+    API --> L[OpenAI-compatible LLM - optional synthesis and topic maintenance]
 ```
 
 ## Demo
