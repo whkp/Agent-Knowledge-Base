@@ -359,3 +359,22 @@ def test_switching_a_source_to_link_only_drops_its_vectors(client: TestClient, m
     assert body["chunks"] == [], "a link-only source is not indexed"
     assert len(added) == 1, "no new vectors are written for unindexed content"
     assert deleted == [added[0]], "the vectors that are no longer readable are dropped"
+
+
+def test_a_document_created_from_a_file_can_be_updated_in_place(client: TestClient):
+    """The update path is not restricted by how the document was ingested."""
+    kb = create_kb(client, "投资笔记")
+    created = client.post(
+        f"/api/knowledge-bases/{kb['id']}/documents/file",
+        data={"title": "手记", "tags": "笔记"},
+        files={"file": ("notes.txt", "第一版手记。".encode(), "text/plain")},
+    ).json()
+
+    body = client.put(
+        f"/api/knowledge-bases/{kb['id']}/documents/{created['id']}",
+        json={"content": "第二版手记。"},
+    ).json()
+
+    assert body["source_path"] == created["source_path"]
+    assert body["file_name"] == "notes.txt", "the file the document came from is still recorded"
+    assert all("第二版" in chunk["content"] for chunk in body["chunks"])

@@ -34,14 +34,15 @@ The Markdown workspace is the long-lived source of truth. SQLite preserves appli
 - Source pages, topic pages, `index.md`, and append-only `log.md`.
 - Topic pages that accumulate sources and, when a model is configured, an LLM-maintained `## Evolving synthesis` section; routing and the source list stay deterministic.
 - React workbench for browsing and editing Markdown pages.
-- Three workbench surfaces over the same workspace: the page itself, the link graph derived from `[[wikilinks]]`, and a wiki health check that can create a page for a broken link.
+- Four workbench surfaces over the same workspace: the page itself, the link graph derived from `[[wikilinks]]`, a wiki health check that can create a page for a broken link, and the recorded answer ratings.
 - Optional OpenAI-compatible synthesis for page and raw-source queries, with citations and deterministic fallback.
 - Page queries that follow `[[wikilinks]]` beyond the direct matches — one hop, or two when the direct matches are weak — marking those pages `related`.
 - Wiki lint for broken links, orphan pages, and missing summaries.
 - Retrieval that is scored with CJK bigrams and BM25, follows wiki links adaptively, and can add page-level vector recall through named strategies (`auto`, `local`, `deep`, `hybrid`, `planned`) chosen per query.
 - A replay tool that compares those strategies against recorded 👍/👎 feedback, and a proposal script that turns that comparison into a reviewable `proposals/*.md` file. Changing a default is a git change, not a runtime toggle.
-- A thumbs up or thumbs down on every answer, with an optional reason when a thumbs down is recorded. Ratings are business data in SQLite and never enter the wiki.
-- MCP tools for source ingestion, page browsing, retrieval-first querying through named strategies, status, linting, answer feedback, and explicit optional synthesis.
+- A thumbs up or thumbs down on every answer, with an optional reason and an optional "which citation was wrong" when a thumbs down is recorded. Ratings are business data in SQLite and never enter the wiki.
+- In-place source updates: re-ingesting identical content from the same source returns a conflict naming the document to update, and `PUT /api/knowledge-bases/{id}/documents/{document_id}` replaces a source without changing its id, its raw snapshot path, its source page path or its row in the topic page. Identical text from a *different* source stays a second source, because merging those would discard provenance.
+- MCP tools for source ingestion and in-place updates, page browsing, retrieval-first querying through named strategies, status, linting, answer feedback, and explicit optional synthesis.
 - Optional ChromaDB and multilingual embedding retrieval for both ordinary documents and traceable external source snapshots.
 
 Current product screenshots are kept under `demo/` and show the workbench, page-first querying with citations, the derived link graph, the feedback sheet, and the optional raw-source RAG mode.
@@ -71,11 +72,11 @@ The derived link graph. Structure comes from `[[wikilinks]]`, so a workspace who
 
 ![AgentKB knowledge graph](demo/agentkb-knowledge-graph.png)
 
-Raw-source RAG stays available when an answer needs the underlying material rather than the maintained pages. Each fragment keeps its source metadata, so a hit can be traced back to the snapshot:
-
-Ratings are the retrieval loop's only evaluation signal, so they are readable in the workbench instead of only through the API. A thumbs down can name which citation was wrong, which is what lets replay judge at page level:
+Ratings are the retrieval loop's only evaluation signal, so they are readable in the workbench instead of only through the API. A thumbs down can name which citation was wrong, which is what lets replay judge a page-level question instead of a set-level one:
 
 ![AgentKB feedback sheet](demo/agentkb-feedback.png)
+
+Raw-source RAG stays available when an answer needs the underlying material rather than the maintained pages. Each fragment keeps its source metadata, so a hit can be traced back to the snapshot:
 
 ![AgentKB RAG query](demo/agentkb-rag-query.png)
 
@@ -136,7 +137,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`, create a knowledge base, ingest a source, and browse the generated Markdown pages. The canvas switches between the page, the derived link graph, and the wiki health check; the reading pane always shows the open page's outlinks, backlinks, and unresolved links.
+Open `http://localhost:5173`, create a knowledge base, ingest a source, and browse the generated Markdown pages. The canvas switches between the page, the derived link graph, the wiki health check, and the recorded ratings; the reading pane always shows the open page's outlinks, backlinks, and unresolved links.
 
 ### Importing External Source Snapshots
 
@@ -150,6 +151,16 @@ PYTHONPATH=. python scripts/import_source_snapshots.py \
 ```
 
 Each record contains `title`, `content`, `source_url`, `platform`, optional author/account and timestamps, a `source_policy` (`full_text`, `excerpt`, or `link_only`), disclosures, and tags. For a `full_text` record, the exact supplied text is stored in SQLite `documents.content`, `raw/sources/`, and the chunk records used to build Chroma. The importer uses the source URL plus content hash to skip an identical record on repeat runs.
+
+Re-capturing a source does not have to create a second document. Ingesting identical content from the same source is answered with `409 Conflict` and the id of the document that already holds it, and that document can be replaced in place — same id, same `raw/sources/` snapshot path, same source page, same row in the topic page:
+
+```bash
+curl -X PUT http://localhost:8000/api/knowledge-bases/1/documents/7 \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "<the re-captured text>", "source_captured_at": "2026-09-19T10:00:00Z"}'
+```
+
+Fields you omit keep their current value, so a text correction cannot silently drop provenance captured earlier.
 
 Complete third-party text belongs in local runtime data (`data/` and `WIKI_ROOT_DIR`), which this repository does not publish. Do not reconstruct unavailable text from a summary; mark it as `excerpt` or `link_only` instead.
 
@@ -256,6 +267,7 @@ PYTHONPATH=. python -m pytest -q
 
 cd ../frontend
 npm run build
+npm run bench:layout          # graph layout timings and quality metrics
 ```
 
 See [docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md) for the full local setup.
@@ -265,9 +277,10 @@ See [docs/LOCAL_INSTALLATION.md](docs/LOCAL_INSTALLATION.md) for the full local 
 [`TODO.md`](TODO.md) is the working plan and the single source of truth for what comes next.
 Its headline items today:
 
-1. Let a rating name *which* citation was wrong, so replay can judge page-level retention instead of set retention.
-2. Break the O(n²) graph layout: measured at 1.8s to open the graph for 800 pages.
-3. Move ingest into a background queue with progress and content-hash deduplication; today it blocks the request and re-ingesting an unchanged source adds a record.
+1. Move ingest into a background queue with progress. It still blocks the request, and model-backed topic maintenance runs inside that request.
+2. Content-level lint. Today lint only checks structure (broken links, orphan pages, missing summaries), not what the pages actually claim.
+3. Replay `mode="rag"` feedback, so the raw-source path is compared the same way as the page path.
+4. Beyond a size threshold, draw only hubs and their neighbours. An 800-page graph opens in 315ms now, but it is still a hairball.
 
 The file also records what the project deliberately does not build, and why — starting with
 an agent inside the backend.
